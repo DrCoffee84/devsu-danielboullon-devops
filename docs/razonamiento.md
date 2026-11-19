@@ -48,4 +48,13 @@ Y luego hare el CD que haga el deploy en K8s con tags (para este ejercicio se me
 Empiezo con el CI: 
 - A mi me gusta (esto igual es discutible) meter los test en un archivo nuevo llamado Dockerfile.test, esto hace que el pipeline sea mas generico y no dependa ya del lenguaje.
 
-- Una vez generado el Dockerfile.test voy a emepzar con el CI propiamente dicho, voy a usar githubActions (asi pueden ver las corridas que fui haciendo) y usare todas herramientas locales para que funcione, la idea es monstar una implemntacion minima, pero funcional. 
+- Una vez generado el Dockerfile.test voy a emepzar con el CI propiamente dicho, voy a usar githubActions (asi pueden ver las corridas que fui haciendo) y usare todas herramientas locales para que funcione, la idea es monstar una implemntacion minima, pero funcional.
+
+- Corregi un error del pipeline ya que la ia uso la rama Main en vez de master (la que tenia en mi local)
+
+- Corri el pipeline y fallo en el lint, pero fallo bien, ya que ruff encontro errores de lint, voy arreglarlos ya que estamos!
+![alt text](screenshots/linterror.png)
+
+- Hice los tres cambios y ruff ya pasa en local. 
+
+
