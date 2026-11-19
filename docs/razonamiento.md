@@ -26,6 +26,8 @@ Lo primero que voy a hacer es leer la app, ver sus endpoints y configuraciones. 
 - Voy a correr la app en local para ver como funciona, usando venv
 ![venv](screenshots/venv.png)
 - Corre bien la app localmente, segun el readme hay que haer migraciones a la DB y demas, esto no lo voy a poner en el Dockerfile ya que la app no se deberia encargar de esto, tampoco voy a cambiar como arranca la app ya que no es el foco del ejercicio,  ![app corriendo](screenshots/apprunning.png)
+
+#### Dockerizar la app
 - Voy a dockerizarla tal cual como esta solo agregando lo necesario para que se pueda desplegar bien en Kubernetes productivo (usando ), para eso ya es mas practico usar la IA, yo hice este promt rapido:
 
 ```text
@@ -33,5 +35,14 @@ Generame únicamente el Dockerfile dentro de app-python/ usando multi-stage y bu
 
 - Build de docker ![build](screenshots/build.png.png)
 
-- La app funciona bien en local , tiene la db dentro del conectedor pero la saquere para hacerla via AWS (o un pod en k8s por el labotario)
+- Me fallo el Dockerfile run porque el usuario no tenia permisos de lectura para la base de datos, lo cambio... 
 
+- La app funciona bien en local , tiene la db dentro del conectedor pero la saquere (CUando llegue a la parte de k8s) para hacerla via AWS (o un pod en k8s por el labotario)
+
+#### Pipeline
+
+Voy a empezar con la parte de pipelines, para eso creamos dos pipeline de CI/CD 
+Uno que sea CI con los pasos mencionados en en el enunciado, o sea hasta el build&push 
+Y luego hare el CD que haga el deploy en K8s con tags (para este ejercicio se me hace lo mas simple, pero se podria usar cualquier branching strategy)
+
+Empiezo con el CI: 
