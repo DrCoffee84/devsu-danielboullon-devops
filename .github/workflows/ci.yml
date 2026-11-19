@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write # push a GHCR con GITHUB_TOKEN
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_DIR: app-python
+  COVERAGE_MIN: "80"
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.APP_DIR }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set image name
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          echo "TAG=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      # 1. Lint
+      - name: 1. Lint (ruff)
+        run: |
+          pip install -q ruff==0.8.4
+          ruff check .
+
+      # 2. SAST + secretos
+      - name: 2. Static Code & Secret Scan
+        run: |
+          pip install -q bandit==1.8.0
+          bandit -r . -x ./api/tests.py -ll
+
+          # .env no debe estar versionado
+          if git ls-files | grep -E '(^|/)\.env$'; then
+            echo "::error::.env versionado"; exit 1
+          fi
+
+          # Patrones comunes de secretos en archivos versionados
+          if git grep -nIE 'AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9]{36}|(SECRET|PASSWORD|TOKEN)[A-Z_]*\s*[:=]\s*["'"'"'][^"'"'"']{8,}' -- . ':!*.md'; then
+            echo "::error::Posible secreto en el repo"; exit 1
+          fi
+          echo "Sin hallazgos"
+
+      # 3. Tests + coverage
+      - name: 3. Unit Tests & Coverage
+        run: |
+          mkdir -p reports && chmod 777 reports
+          docker build -f Dockerfile.test -t app-test .
+          docker run --rm -e COVERAGE_MIN="$COVERAGE_MIN" \
+            -v "$PWD/reports:/app/reports" app-test
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: ${{ env.APP_DIR }}/reports/
+          if-no-files-found: ignore
+
+      # 4. Build + escaneo de imagen
+      - name: 4. Docker Build & Image Scan
+        run: |
+          docker build -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:0.58.1 image --no-progress --ignore-unfixed \
+            --severity CRITICAL --exit-code 1 "$IMAGE:$TAG"
+
+      # 5. Push (solo si todo lo anterior pasó)
+      - name: 5. Docker Push
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker push "$IMAGE:$TAG"
+          docker push "$IMAGE:latest"
+
+      # 6. Notificación simulada
+      - name: 6. Notification
+        if: always()
+        run: |
+          echo "Estado:  ${{ job.status }}"
+          echo "Rama:    ${{ github.ref_name }}"
+          echo "SHA:     ${{ github.sha }}"
+          echo "Imagen:  $IMAGE:$TAG"
