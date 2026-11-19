@@ -8,7 +8,8 @@ Los siguientes son los entregables que deben ser enviados:
 - Por favor comparta el resultado de la ejecución del pipeline ya sea a través de una URL pública (Ej. Github Actions, Azure DevOps Pipelines, etc.) o capturas de pantalla y resultados de ejecución en caso de que no puedas compartir un punto de acceso público. Puede incluir los mismos como documentación dentro del entregable.
 - Todo el código generado debe ser versionado usando un repositorio público GITHUB creado por el candidato.
 No existe limitación en el uso de internet. Tiene 7 días para terminar el ejercicio y enviarlo.
-DevOps Prueba Técnica
+
+# DevOps Prueba Técnica
 
 ## Habilidades:
 

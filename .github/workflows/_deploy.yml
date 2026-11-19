@@ -1,0 +1,188 @@
+# Workflow reutilizable: despliega UNA imagen ya existente en GHCR a UN entorno.
+# No construye nada: solo fija el tag en el overlay, renderiza y aplica.
+# Lo invoca cd.yml una vez por entorno (1 build → N deploys).
+name: Deploy (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: GitHub Environment y overlay de kustomize (dev | prod)
+        type: string
+        required: true
+      image:
+        description: Repositorio de la imagen en GHCR (sin tag)
+        type: string
+        required: true
+      image_tag:
+        description: Tag inmutable a desplegar (short SHA)
+        type: string
+        required: true
+      git_ref:
+        description: Commit del que se toman los manifiestos
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  APP_NAME: app-python
+  KUBECTL_VERSION: v1.31.4
+  KUSTOMIZE_VERSION: v5.5.0
+  ROLLOUT_TIMEOUT: 300s
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # ─────────────────────────────────────────────────────────────────────
+    # GITHUB ENVIRONMENT
+    # Acá se engancha el job al Environment (dev o prod). Las reglas de
+    # protección del Environment se evalúan ANTES de que arranque el job:
+    #   - prod: el job queda en "Waiting for review" hasta que un aprobador
+    #     lo autorice. Los Required reviewers los configurás vos en
+    #     Settings → Environments → prod (este workflow no los define).
+    #   - dev: sin reglas de protección → corre automáticamente.
+    # Secretos y variables por Environment que usa este job:
+    #   secrets.KUBE_CONFIG  kubeconfig del cluster en base64 (obligatorio para aplicar)
+    #   vars.APP_URL         URL pública del entorno (opcional: link + smoke test)
+    # ─────────────────────────────────────────────────────────────────────
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ vars.APP_URL }}
+
+    env:
+      ENVIRONMENT: ${{ inputs.environment }}
+      IMAGE: ${{ inputs.image }}
+      IMAGE_TAG: ${{ inputs.image_tag }}
+      OVERLAY_DIR: app-python-gitops/overlays/${{ inputs.environment }}
+      NAMESPACE: app-python-${{ inputs.environment }}
+      RENDERED: ${{ github.workspace }}/rendered-${{ inputs.environment }}.yaml
+
+    steps:
+      - name: Checkout manifests
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref }}
+          persist-credentials: false
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: ${{ env.KUBECTL_VERSION }}
+
+      - name: Setup kustomize
+        run: |
+          curl -fsSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" kustomize
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/kustomize" version
+
+      # Versionado: solo se toca `images[].newTag` del overlay de ESTE entorno,
+      # nunca la base. El cambio vive en el runner, no se commitea.
+      - name: Set image tag in overlay
+        working-directory: ${{ env.OVERLAY_DIR }}
+        env:
+          ACTOR: ${{ github.actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          kustomize edit set image "${IMAGE}:${IMAGE_TAG}"
+
+          # change-cause queda en cada ReplicaSet → `kubectl rollout history` muestra el tag.
+          CAUSE="tag=${IMAGE_TAG} actor=${ACTOR} run=${RUN_URL}"
+          PATCH=$(printf '{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"%s","annotations":{"kubernetes.io/change-cause":"%s"}}}' "$APP_NAME" "$CAUSE")
+          kustomize edit add patch --kind Deployment --name "$APP_NAME" --patch "$PATCH"
+
+          echo "::group::kustomization.yaml (${ENVIRONMENT})"
+          cat kustomization.yaml
+          echo "::endgroup::"
+
+      - name: Render manifests
+        run: |
+          kustomize build "$OVERLAY_DIR" > "$RENDERED"
+          if ! grep -q "image: ${IMAGE}:${IMAGE_TAG}$" "$RENDERED"; then
+            echo "::error::El manifiesto renderizado no usa ${IMAGE}:${IMAGE_TAG}"
+            exit 1
+          fi
+          echo "Renderizado OK con ${IMAGE}:${IMAGE_TAG}"
+
+      - name: Upload rendered manifests
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendered-${{ inputs.environment }}-${{ inputs.image_tag }}
+          path: ${{ env.RENDERED }}
+          retention-days: 30
+
+      - name: Configure cluster access
+        id: kube
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          if [ -z "$KUBE_CONFIG" ]; then
+            echo "::warning::Secret KUBE_CONFIG no definido en el Environment '${ENVIRONMENT}': se renderizó pero NO se aplicó en ningún cluster."
+            echo "apply=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          KUBECONFIG_FILE="$RUNNER_TEMP/kubeconfig"
+          echo "$KUBE_CONFIG" | base64 -d > "$KUBECONFIG_FILE"
+          chmod 600 "$KUBECONFIG_FILE"
+          echo "KUBECONFIG=$KUBECONFIG_FILE" >> "$GITHUB_ENV"
+          echo "apply=true" >> "$GITHUB_OUTPUT"
+
+      - name: Diff against cluster
+        if: steps.kube.outputs.apply == 'true'
+        run: |
+          # kubectl diff: 0 = sin cambios, 1 = hay cambios, >1 = error.
+          set +e
+          kubectl diff -f "$RENDERED"
+          rc=$?
+          set -e
+          [ "$rc" -le 1 ] || exit "$rc"
+
+      - name: Apply manifests
+        if: steps.kube.outputs.apply == 'true'
+        run: kubectl apply -f "$RENDERED"
+
+      - name: Wait for rollout
+        id: rollout
+        if: steps.kube.outputs.apply == 'true'
+        run: |
+          kubectl rollout status "deployment/${APP_NAME}" -n "$NAMESPACE" --timeout="$ROLLOUT_TIMEOUT"
+
+      # Red de seguridad: si el rollout no queda sano, se vuelve a la
+      # revisión anterior del Deployment y el job falla igual.
+      - name: Auto-rollback on failed rollout
+        if: failure() && steps.rollout.outcome == 'failure'
+        run: |
+          echo "::error::Rollout fallido de ${IMAGE}:${IMAGE_TAG} en ${ENVIRONMENT}. Volviendo a la revisión anterior."
+          kubectl rollout undo "deployment/${APP_NAME}" -n "$NAMESPACE"
+          kubectl rollout status "deployment/${APP_NAME}" -n "$NAMESPACE" --timeout="$ROLLOUT_TIMEOUT"
+
+      - name: Smoke test
+        if: steps.kube.outputs.apply == 'true' && vars.APP_URL != ''
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          curl -fsS --retry 5 --retry-delay 5 --retry-all-errors "${APP_URL%/}/api/users/" > /dev/null
+          echo "Smoke test OK: ${APP_URL%/}/api/users/"
+
+      - name: Summary
+        if: always()
+        env:
+          APPLIED: ${{ steps.kube.outputs.apply }}
+          STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "### Deploy · \`${ENVIRONMENT}\`"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Estado | ${STATUS} |"
+            echo "| Imagen | \`${IMAGE}:${IMAGE_TAG}\` |"
+            echo "| Namespace | \`${NAMESPACE}\` |"
+            echo "| Aplicado en cluster | ${APPLIED:-false} |"
+            echo "| Manifiestos (commit) | \`${{ inputs.git_ref }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

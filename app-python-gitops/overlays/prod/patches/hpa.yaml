@@ -1,0 +1,10 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: app-python
+spec:
+  minReplicas: 3 # al menos una réplica por zona
+  maxReplicas: 10
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300 # evita bajar réplicas ante picos cortos

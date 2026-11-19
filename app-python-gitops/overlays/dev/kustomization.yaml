@@ -1,0 +1,34 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: app-python-dev
+
+resources:
+  - namespace.yaml
+  - ../../base
+  - externalsecret.yaml
+  - networkpolicy.yaml
+  - ingress.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/environment: dev
+
+# Versión desplegada en dev. Mismo repositorio GHCR que prod, tag propio.
+# El CD la reemplaza en el runner con `kustomize edit set image` antes de
+# aplicar (no se commitea). El valor de acá es solo el último conocido, para
+# poder renderizar el overlay localmente. Nunca `latest`: siempre short SHA.
+images:
+  - name: ghcr.io/drcoffee84/devsu-danielboullon-devops
+    newTag: 88dc298
+
+patches:
+  - path: patches/hpa.yaml
+  - path: patches/pdb.yaml
+  # El HPA es dueño de las réplicas (ver overlays/prod/kustomization.yaml).
+  - target:
+      kind: Deployment
+      name: app-python
+    patch: |-
+      - op: remove
+        path: /spec/replicas

@@ -125,3 +125,11 @@ $  curl.exe http://app-python.localhost/api/users/1/ -v
 < Cross-Origin-Opener-Policy: same-origin
 < 
 {"id":1,"dni":"12341234","name":"Akira Toriyama"}* Connection #0 to host app-python.localhost left intact
+
+---
+#### CD
+
+Bien ahora voy hacer el CD aca voy a empezar definir la buenas pracitcas y mi motivaciones, yo pienso siempre en un BUILD N deploys
+la idea es usar la rama main para hacer el dpeloy a dev y a prod, 
+Porque? porque usariamos aprobovadores de github y solo subimos a prod cosas que ya estan probadas en otro ambiente (dev, pero tambien podria ser test y stage, auqneu actualemten ya no se usan 4 ambientes sino 2 en las empresas, y algunas ya estan probando directo en produccion como una practica)
+

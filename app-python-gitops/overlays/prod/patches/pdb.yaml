@@ -1,0 +1,6 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: app-python
+spec:
+  minAvailable: 2 # con minReplicas 3, un drain nunca deja menos de 2 pods

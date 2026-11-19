@@ -1,0 +1,8 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: app-python
+spec:
+  # Con 1 réplica, minAvailable: 1 bloquearía el drain de nodos.
+  minAvailable: null
+  maxUnavailable: 1

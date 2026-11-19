@@ -1,0 +1,29 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app-python
+  annotations:
+    # Django solo acepta Host=localhost (ALLOWED_HOSTS=[] en el código).
+    # Cuando la app lea ALLOWED_HOSTS del entorno, esta anotación se elimina.
+    nginx.ingress.kubernetes.io/upstream-vhost: localhost
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/limit-rps: "20"
+    # TLS emitido por cert-manager (requiere el ClusterIssuer en el cluster).
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - app-python.example.com # reemplazar por el dominio real
+      secretName: app-python-tls
+  rules:
+    - host: app-python.example.com # reemplazar por el dominio real
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: app-python
+                port:
+                  name: http

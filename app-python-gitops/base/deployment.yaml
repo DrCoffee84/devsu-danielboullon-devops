@@ -1,0 +1,105 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-python
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  minReadySeconds: 5
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: api
+    spec:
+      serviceAccountName: app-python
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/component: api
+      containers:
+        - name: api
+          image: ghcr.io/drcoffee84/devsu-danielboullon-devops
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: app-python-config
+            - secretRef:
+                name: app-python-secret
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # Django tiene ALLOWED_HOSTS=[] y DEBUG=True en el código: solo
+          # acepta Host=localhost, por eso las probes lo envían explícitamente.
+          startupProbe:
+            httpGet:
+              path: /api/users/
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: localhost
+            periodSeconds: 5
+            failureThreshold: 12
+          readinessProbe:
+            httpGet:
+              path: /api/users/
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: localhost
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /api/users/
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: localhost
+            periodSeconds: 20
+            timeoutSeconds: 5
+          lifecycle:
+            # Margen para salir de los endpoints antes del SIGTERM.
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # SQLite efímero por pod: válido para el laboratorio, no para producción.
+        - name: data
+          emptyDir:
+            sizeLimit: 100Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 50Mi

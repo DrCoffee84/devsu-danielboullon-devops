@@ -1,0 +1,163 @@
+# CD: 1 build → N deploys.
+# La imagen la construye y publica UNA sola vez el workflow "CI" en GHCR con
+# tag = short SHA. Este workflow nunca construye: promueve esa misma imagen
+# a dev (automático) y después a prod (con aprobación manual).
+#
+#   CI (master) ──ok──▶ resolve ──▶ deploy-dev ──▶ deploy-prod (espera aprobación)
+#   workflow_dispatch ─▶ resolve ──▶ deploy-dev  ó  deploy-prod   (deploy / rollback manual)
+#
+# El despliegue en sí está en _deploy.yml (workflow reutilizable), que es
+# donde cada job se engancha a su GitHub Environment.
+name: CD
+
+on:
+  # Automático: cada vez que CI termina en master. Solo sigue si terminó OK.
+  # Nota: workflow_run solo dispara si este archivo está en la rama por defecto.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [master]
+
+  # Manual: deploy puntual o rollback a un tag anterior que ya esté en GHCR.
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Entorno destino
+        type: choice
+        options: [dev, prod]
+        default: dev
+        required: true
+      image_tag:
+        description: Tag de GHCR (short SHA, 7+ hex). Vacío = SHA del commit seleccionado. Nunca "latest".
+        type: string
+        required: false
+
+# Mínimo privilegio: nada por defecto, cada job pide solo lo suyo.
+permissions: {}
+
+jobs:
+  resolve:
+    name: Resolve image tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    permissions:
+      packages: read # verificar que el tag exista en GHCR
+    outputs:
+      image: ${{ steps.resolve.outputs.image }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      git_ref: ${{ steps.resolve.outputs.git_ref }}
+      deploy_dev: ${{ steps.resolve.outputs.deploy_dev }}
+      deploy_prod: ${{ steps.resolve.outputs.deploy_prod }}
+    steps:
+      - name: Resolve tag and targets
+        id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          CI_SHA: ${{ github.event.workflow_run.head_sha }}
+          INPUT_ENV: ${{ inputs.environment }}
+          INPUT_TAG: ${{ inputs.image_tag }}
+        run: |
+          # Mismo nombre de imagen que calcula ci.yml.
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+
+          if [ "$EVENT" = "workflow_run" ]; then
+            # Tag = short SHA del commit que construyó CI (igual que ci.yml).
+            TAG="${CI_SHA::7}"
+            GIT_REF="$CI_SHA"
+            DEPLOY_DEV=true
+            DEPLOY_PROD=true # queda bloqueado por la aprobación del Environment prod
+          else
+            TAG="${INPUT_TAG:-${GITHUB_SHA::7}}"
+            # Los manifiestos salen del commit seleccionado al disparar; en un
+            # rollback solo cambia la imagen, no la configuración.
+            GIT_REF="$GITHUB_SHA"
+            DEPLOY_DEV=$([ "$INPUT_ENV" = "dev" ] && echo true || echo false)
+            DEPLOY_PROD=$([ "$INPUT_ENV" = "prod" ] && echo true || echo false)
+
+            if [ "$DEPLOY_PROD" = "true" ] && [ "$GITHUB_REF" != "refs/heads/master" ]; then
+              echo "::error::prod solo se despliega desde master (ref actual: $GITHUB_REF)."
+              exit 1
+            fi
+          fi
+
+          # Solo tags inmutables basados en SHA: nada de "latest" ni tags movibles.
+          if ! [[ "$TAG" =~ ^[0-9a-f]{7,40}$ ]]; then
+            echo "::error::Tag inválido '$TAG'. Usá un short SHA publicado por CI (ej: 88dc298)."
+            exit 1
+          fi
+
+          {
+            echo "image=$IMAGE"
+            echo "tag=$TAG"
+            echo "git_ref=$GIT_REF"
+            echo "deploy_dev=$DEPLOY_DEV"
+            echo "deploy_prod=$DEPLOY_PROD"
+          } >> "$GITHUB_OUTPUT"
+
+      # Un rollback nunca reconstruye: si el tag no está en GHCR, se corta acá.
+      - name: Verify image exists in GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          REF: ${{ steps.resolve.outputs.image }}:${{ steps.resolve.outputs.tag }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          if ! MANIFEST=$(docker buildx imagetools inspect "$REF" --format '{{json .Manifest}}'); then
+            echo "::error::La imagen $REF no existe en GHCR."
+            exit 1
+          fi
+          DIGEST=$(jq -r .digest <<< "$MANIFEST")
+          echo "Imagen: $REF"
+          echo "Digest: $DIGEST"
+          echo "Se despliega \`$REF\` (\`$DIGEST\`)" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-dev:
+    name: Dev
+    needs: resolve
+    if: needs.resolve.outputs.deploy_dev == 'true'
+    # Un deploy por entorno a la vez; no se cancela uno en curso (cluster a medias).
+    concurrency:
+      group: cd-dev
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    # Environment "dev" (sin reglas de protección → automático). Ver _deploy.yml.
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment: dev
+      image: ${{ needs.resolve.outputs.image }}
+      image_tag: ${{ needs.resolve.outputs.tag }}
+      git_ref: ${{ needs.resolve.outputs.git_ref }}
+    secrets: inherit
+
+  deploy-prod:
+    name: Prod
+    needs: [resolve, deploy-dev]
+    # Desde CI: solo si dev salió bien (promoción de la MISMA imagen).
+    # Desde workflow_dispatch con prod: dev se saltea y se va directo (rollback).
+    if: >-
+      always() &&
+      needs.resolve.result == 'success' &&
+      needs.resolve.outputs.deploy_prod == 'true' &&
+      (needs.deploy-dev.result == 'success' || needs.deploy-dev.result == 'skipped')
+    concurrency:
+      group: cd-prod
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    # ─────────────────────────────────────────────────────────────────────
+    # Environment "prod" → APROBACIÓN MANUAL.
+    # El job interno de _deploy.yml declara `environment: prod`; GitHub lo
+    # pausa en "Waiting for review" hasta que un Required reviewer apruebe.
+    # ACCIÓN PENDIENTE (Daniel): Settings → Environments → prod →
+    #   Required reviewers + Deployment branches: master.
+    # Sin esa configuración, prod se desplegaría sin pedir aprobación.
+    # ─────────────────────────────────────────────────────────────────────
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment: prod
+      image: ${{ needs.resolve.outputs.image }}
+      image_tag: ${{ needs.resolve.outputs.tag }}
+      git_ref: ${{ needs.resolve.outputs.git_ref }}
+    secrets: inherit
