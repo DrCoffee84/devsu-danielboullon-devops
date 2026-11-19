@@ -53,8 +53,75 @@ Empiezo con el CI:
 - Corregi un error del pipeline ya que la ia uso la rama Main en vez de master (la que tenia en mi local)
 
 - Corri el pipeline y fallo en el lint, pero fallo bien, ya que ruff encontro errores de lint, voy arreglarlos ya que estamos!
-![alt text](screenshots/linterror.png)
+https://github.com/DrCoffee84/devsu-danielboullon-devops/actions/runs/44568310550/job/135716069482 
 
 - Hice los tres cambios y ruff ya pasa en local. 
 
+- volvio a fallar el pipeline pero ahora por temas de seguridad trivy detecto fallas en las dependencias de Python, detalles: https://github.com/DrCoffee84/devsu-danielboullon-devops/actions/runs/44570413788/job/135723593993
 
+
+- Listo se corrigio los errores de trivy , ahora la imagen es segura (mas segura que antes), se podria poner mas escaneres, o jugar un poco mas , pero creo que el punto esta bien. https://github.com/DrCoffee84/devsu-danielboullon-devops/actions/runs/44578179451
+
+- Siguietne paso: Una vez que tengo mi imagen en mi repositorio (GitHub Container Registry)
+
+Considero que la parte de CI ya esta y voy a pasar a la parte de CD
+
+pero tengo varios probelmas
+
+1. No un lugar donde desplegar, entonces voy a crear un laboratio local de k8s
+2. Para eso voy a usar docker desktop, ya que mi pc es windows y con un nodo para 2 pods me alcanza y sobra 
+3. SI uso k8s, debo definir tambien como voy de deployar esto, en la caprtea de la app, teoricamente es del dev, salvo ayudarlo con los Dockerfile (via PR o dejando una plantilla decente como punto de partida) no me gustaria tocar su repositorio, entonces voy a crear una carpeta de gitops simulando un repositorio extra (en esta practica dejo todo en unlugar para uqe sea mas facil evalular) donde estaran los archivos necesraios para hacer el deploy en kubernetes 
+
+Para crear estas caperta me gusta tener una nomenclatura que sea $nombreDeApp-gitops, esto se puede crear apartir de IDP de la empresa. 
+
+Como la imagen esta publica voy a crear el deploymente con la imagen publica.
+
+Use la ia para crear los archivos de kuztomice base y overlay, pero no me gusto que haya puesto el namespace en base, ya uqe me gusta considerar cada overlay como una ambiente y cada ambiente en k8s me gustar representarlos con un post fijo en el namespace de la app, quizas luego instancie la DB fuera de del namespace.  Esto lo peude hacer tranquilamente el IDP de forma automatica
+
+aplicio el kubectl kustomize overlays/local
+
+pero para mi es buena practica primero crear el namespace, siento que es meno propenso a erroes
+
+$kubectl apply -f app-python-gitops/overlays/local/namespace.yaml
+namespace/app-python-local created
+
+$ kubectl apply -k app-python-gitops/overlays/local
+namespace/app-python-local configured
+serviceaccount/app-python created
+configmap/app-python-config-g889mfd7gk created
+secret/app-python-secret-85f6f6mfgc created
+service/app-python created
+deployment.apps/app-python created
+poddisruptionbudget.policy/app-python created
+horizontalpodautoscaler.autoscaling/app-python created
+ingress.networking.k8s.io/app-python created
+
+
+veo que los pods corren bien 
+$ kubectl get pods -n app-python-local
+NAME                          READY   STATUS    RESTARTS   AGE
+app-python-69b46b558f-c9fbc   1/1     Running   0          69s
+app-python-69b46b558f-df2hw   1/1     Running   0          69s
+
+Y el servicio responde bien en local:
+$  curl.exe http://app-python.localhost/api/users/1/ -v
+*   Trying 127.0.0.1:80...
+* Connected to app-python.localhost (127.0.0.1) port 80 (#0)
+> GET /api/users/1/ HTTP/1.1
+> Host: app-python.localhost
+> User-Agent: curl/8.0.1
+> Accept: */*
+> 
+< HTTP/1.1 200 OK
+< Date: Thu, 19 Nov 2026 18:23:22 GMT
+< Content-Type: application/json
+< Content-Length: 49
+< Connection: keep-alive
+< Vary: Accept, Cookie
+< Allow: GET, PUT, PATCH, DELETE, HEAD, OPTIONS
+< X-Frame-Options: DENY
+< X-Content-Type-Options: nosniff
+< Referrer-Policy: same-origin
+< Cross-Origin-Opener-Policy: same-origin
+< 
+{"id":1,"dni":"12341234","name":"Akira Toriyama"}* Connection #0 to host app-python.localhost left intact
