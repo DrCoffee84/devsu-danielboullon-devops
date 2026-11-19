@@ -1,0 +1,92 @@
+# syntax=docker/dockerfile:1.7
+# Imagen efímera de CI: corre los tests con cobertura y deja los reportes en /app/reports.
+
+ARG PYTHON_VERSION=3.11
+
+FROM python:${PYTHON_VERSION}-slim-bookworm
+
+# Versiones fijas de las herramientas de test para builds reproducibles.
+ARG PYTEST_VERSION=8.3.4
+ARG PYTEST_DJANGO_VERSION=4.9.0
+ARG PYTEST_COV_VERSION=6.0.0
+ARG COVERAGE_VERSION=7.6.10
+
+# UID/GID del usuario de test, se puede alinear con el del runner vía --build-arg.
+ARG APP_UID=10001
+ARG APP_GID=10001
+
+# Umbral mínimo de cobertura, sobreescribible en build o en run.
+ARG COVERAGE_MIN=80
+
+# Valores dummy solo para test: nunca usar secretos reales acá.
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_INPUT=1 \
+    DJANGO_SETTINGS_MODULE=demo.settings \
+    DJANGO_SECRET_KEY=insecure-test-only-not-a-secret \
+    DJANGO_DEBUG=False \
+    DATABASE_NAME=test.sqlite3 \
+    REPORTS_DIR=/app/reports \
+    COVERAGE_FILE=/tmp/.coverage \
+    COVERAGE_MIN=${COVERAGE_MIN} \
+    HOME=/tmp \
+    PATH="/opt/venv/bin:${PATH}"
+
+# Venv aislado para no mezclar paquetes con el Python del sistema.
+RUN python -m venv /opt/venv
+
+WORKDIR /app
+
+# Primero solo requirements para aprovechar la caché de capas.
+COPY requirements.txt ./
+
+# Instala dependencias de la app y de test usando la caché de pip de BuildKit.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip \
+ && pip install -r requirements.txt \
+      "pytest==${PYTEST_VERSION}" \
+      "pytest-django==${PYTEST_DJANGO_VERSION}" \
+      "pytest-cov==${PYTEST_COV_VERSION}" \
+      "coverage==${COVERAGE_VERSION}"
+
+# Config de pytest: settings de Django y descubrimiento de tests.
+COPY <<EOF /app/pytest.ini
+[pytest]
+DJANGO_SETTINGS_MODULE = demo.settings
+python_files = tests.py test_*.py *_tests.py
+addopts = -ra -p no:cacheprovider
+EOF
+
+# Config de coverage: mide la app y excluye migraciones y tests.
+COPY <<EOF /app/.coveragerc
+[run]
+source = api,demo
+omit =
+    */migrations/*
+    */tests.py
+    */test_*.py
+    demo/asgi.py
+    demo/wsgi.py
+
+[report]
+show_missing = True
+skip_covered = False
+EOF
+
+# Copia explícita del código para no meter .env, .venv ni db.sqlite3.
+COPY manage.py ./
+COPY demo/ ./demo/
+COPY api/ ./api/
+
+# Usuario no-root y carpeta de reportes escribible por cualquier UID (útil con --user).
+RUN groupadd --system --gid "${APP_GID}" app \
+ && useradd --system --uid "${APP_UID}" --gid app --no-create-home --shell /usr/sbin/nologin app \
+ && mkdir -p "${REPORTS_DIR}" \
+ && chown "${APP_UID}:${APP_GID}" "${REPORTS_DIR}" \
+ && chmod 0777 "${REPORTS_DIR}"
+
+USER ${APP_UID}:${APP_GID}
+
+# Corre tests, genera junit/xml/html y falla si la cobertura queda bajo el umbral.
+CMD ["sh", "-c", "pytest --junitxml=${REPORTS_DIR}/junit.xml --cov --cov-config=/app/.coveragerc --cov-report=term-missing --cov-report=xml:${REPORTS_DIR}/coverage.xml --cov-report=html:${REPORTS_DIR}/htmlcov --cov-fail-under=${COVERAGE_MIN}"]

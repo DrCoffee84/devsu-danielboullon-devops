@@ -46,3 +46,4 @@ Uno que sea CI con los pasos mencionados en en el enunciado, o sea hasta el buil
 Y luego hare el CD que haga el deploy en K8s con tags (para este ejercicio se me hace lo mas simple, pero se podria usar cualquier branching strategy)
 
 Empiezo con el CI: 
+- A mi me gusta (esto igual es discutible) meter los test en un archivo nuevo llamado Dockerfile.test, esto hace que el 
