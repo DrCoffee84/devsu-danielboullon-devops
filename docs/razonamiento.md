@@ -1,88 +1,92 @@
-# Objectivo 
+# Razonamiento
 
-No es un documento formal sino que acá voy a ir escribiendo cómo pienso y encaro el ejercicio. 
+No es un documento formal: acá voy anotando cómo pienso y encaro el ejercicio.
 
-Como me están evaluando, voy a explicar paso a paso mi razonamiento y las decisiones que voy tomando para resolver el ejercicio. La no es utilizar IA para que resuelva todo por mí, sino como una herramienta de apoyo para tareas que manualmente serían más pesadas. No es algo demasiado complejo, sino más bien un escenario típico de DevOps, así que mi objetivo es demostrar principalmente cómo abordo los problemas, cómo los analizo, cómo llego a las soluciones y el porqué de ellas.
+Como me están evaluando, quiero que se vea el porqué de cada decisión. La idea no es que la IA resuelva todo por mí, sino usarla como apoyo en las tareas que a mano serían más pesadas. El escenario es un caso típico de DevOps, así que lo importante es mostrar cómo analizo el problema y cómo llego a cada solución.
 
-> nota: revise la app con IA y mano al ser un zip externo, verifique que no tenga scrits escondidos (como en el .git), ni hooks ni dependencias raras, que compromentan mi PC. 
+> Nota: como la app vino en un zip externo, la revisé a mano y con IA antes de correr nada. Verifiqué que no tuviera scripts escondidos (por ejemplo en `.git`), hooks ni dependencias raras que comprometan mi PC.
 
 ## Enunciado
 
-Deje una copia del enunciado en [docs\enunciado.md](enunciado.md) para tener a mano e ir cumpliendo punto por punto, el primero es dockerizar la app, yo elegi la de ´devsu-demo-devops-python´. 
+- Dejé una copia en [enunciado.md](enunciado.md) para tenerlo a mano e ir cumpliendo punto por punto.
+- Elegí la app de Python (`demo-devops-python`).
 
-### Dockerizar la aplicación
+## 1. Dockerizar la aplicación
 
-Lo primero que voy a hacer es leer la app, ver sus endpoints y configuraciones. La app 
+Lo primero es leer la app: endpoints, configuración y cómo arranca.
 
-#### Stack
-- Django 4.2 + DRF 3.14 + django-environ 0.10. Python 3.11.3.
-- Base de datos: SQLite (db.sqlite3, es un archivo local).
-- Entrypoints: demo/wsgi.py y demo/asgi.py. No hay servidor de producción en requirements.txt: no está gunicorn ni uvicorn.
+### Stack
 
-#### Notas Devops
-- No tiene Healthcheks ni readiness -> se la voy a agregar  
-- El Post de users devuelve 201 no 200 -> voy a cambiar la docu
-- Es mala practica dejar el .env con claves (por mas que sean locales) -> en su lugar voy a cambiarlo por el .env.example con la lista de variables vacias. (normalmente se rotarian porque ya quedo en el historial) ```git rm --cached app-python/.env```
-- Voy a correr la app en local para ver como funciona, usando venv
-![venv](screenshots/venv.png)
-- Corre bien la app localmente, segun el readme hay que haer migraciones a la DB y demas, esto no lo voy a poner en el Dockerfile ya que la app no se deberia encargar de esto, tampoco voy a cambiar como arranca la app ya que no es el foco del ejercicio,  ![app corriendo](screenshots/apprunning.png)
+- Django 4.2 + DRF 3.14 + django-environ 0.10, Python 3.11.3.
+- Base de datos SQLite (`db.sqlite3`, archivo local).
+- Entrypoints `demo/wsgi.py` y `demo/asgi.py`. No hay servidor de producción en `requirements.txt` (ni gunicorn ni uvicorn).
 
-#### Dockerizar la app
-- Voy a dockerizarla tal cual como esta solo agregando lo necesario para que se pueda desplegar bien en Kubernetes productivo (usando ), para eso ya es mas practico usar la IA, yo hice este promt rapido:
+### Lo que veo como DevOps
 
-```text
-Generame únicamente el Dockerfile dentro de app-python/ usando multi-stage y buenas prácticas. Si hace falta sumar o cambiar algo en el .env, avisame qué es y lo ajusto yo, pero vos asumí que ya está listo. Quiero que quede un Dockerfile final bien sólido: copiando primero el requirements.txt para aprovechar la caché de capas, exponiendo los puertos que correspondan, usando un stage con herramientas de build/instalación y pasando a una imagen slim corriendo con usuario no-root para ejecución, además de todo lo que sume en seguridad y rendimiento.```
+- No tiene healthcheck ni readiness → se los quiero agregar.
+- El POST de users devuelve 201, no 200 → corrijo la docu.
+- Dejar el `.env` con claves es mala práctica, aunque sean locales → lo saco y dejo un `.env.example` con las variables vacías. En un caso real además las rotaría, porque ya quedaron en el historial.
+  ```
+  git rm --cached app-python/.env
+  ```
+- Corro la app en local con venv para ver cómo funciona:
+  ![venv](screenshots/venv.png)
+- Funciona bien. Según el README hay que correr las migraciones; eso no debería ser responsabilidad de la imagen, y tampoco quiero cambiar cómo arranca la app porque no es el foco del ejercicio.
+  ![app corriendo](screenshots/apprunning.png)
 
-- Build de docker ![build](screenshots/build.png.png)
+### Dockerfile
 
-- Me fallo el Dockerfile run porque el usuario no tenia permisos de lectura para la base de datos, lo cambio... 
+- La dockerizo tal cual está, agregando solo lo necesario para que se pueda desplegar bien en un Kubernetes productivo.
+- Acá sí es más práctico usar la IA. Le pasé este prompt:
 
-- La app funciona bien en local , tiene la db dentro del conectedor pero la saquere (CUando llegue a la parte de k8s) para hacerla via AWS (o un pod en k8s por el labotario)
+  ```text
+  Generame únicamente el Dockerfile dentro de app-python/ usando multi-stage y buenas prácticas. Si hace falta sumar o cambiar algo en el .env, avisame qué es y lo ajusto yo, pero vos asumí que ya está listo. Quiero que quede un Dockerfile final bien sólido: copiando primero el requirements.txt para aprovechar la caché de capas, exponiendo los puertos que correspondan, usando un stage con herramientas de build/instalación y pasando a una imagen slim corriendo con usuario no-root para ejecución, además de todo lo que sume en seguridad y rendimiento.
+  ```
 
-#### Pipeline
+- Build:
+  ![build](screenshots/build.png)
+- El primer `docker run` falló: el usuario no-root no tenía permisos sobre la base de datos. Lo corregí.
+- Ahora funciona en local. La base queda dentro del contenedor; la voy a sacar cuando llegue a Kubernetes (en AWS, o un pod en el laboratorio).
 
-Voy a empezar con la parte de pipelines, para eso creamos dos pipeline de CI/CD 
-Uno que sea CI con los pasos mencionados en en el enunciado, o sea hasta el build&push 
-Y luego hare el CD que haga el deploy en K8s con tags (para este ejercicio se me hace lo mas simple, pero se podria usar cualquier branching strategy)
+## 2. Pipeline
 
-Empiezo con el CI: 
-- A mi me gusta (esto igual es discutible) meter los test en un archivo nuevo llamado Dockerfile.test, esto hace que el pipeline sea mas generico y no dependa ya del lenguaje.
+Separo en dos pipelines:
 
-- Una vez generado el Dockerfile.test voy a emepzar con el CI propiamente dicho, voy a usar githubActions (asi pueden ver las corridas que fui haciendo) y usare todas herramientas locales para que funcione, la idea es monstar una implemntacion minima, pero funcional.
+- **CI**: los pasos del enunciado, hasta el build & push.
+- **CD**: el deploy a Kubernetes.
 
-- Corregi un error del pipeline ya que la ia uso la rama Main en vez de master (la que tenia en mi local)
+### CI
 
-- Corri el pipeline y fallo en el lint, pero fallo bien, ya que ruff encontro errores de lint, voy arreglarlos ya que estamos!
-https://github.com/DrCoffee84/devsu-danielboullon-devops/actions/runs/44568310550/job/135716069482 
+- Me gusta (es discutible) poner los tests en un `Dockerfile.test`. Así el pipeline queda más genérico y no depende del lenguaje.
+- Uso GitHub Actions, así se pueden ver las corridas que fui haciendo. La idea es una implementación mínima pero funcional, con herramientas que corran dentro del runner.
+- La IA había puesto la rama `main` y yo trabajo en `master` → lo corregí.
+- Primera corrida: falló en el lint, pero falló bien. Ruff encontró errores reales y ya que estamos los arreglé.
+  https://github.com/DrCoffee84/devsu-danielboullon-devops/actions/runs/44568310550/job/135716069482
+- Hice los tres cambios y ruff pasó en local.
+- Segunda corrida: falló por seguridad. Trivy detectó CVE críticos en las dependencias de Python.
+  https://github.com/DrCoffee84/devsu-danielboullon-devops/actions/runs/44570413788/job/135723593993
+- Subí Django a 4.2.30 y Trivy pasó. La imagen queda más segura que antes. Se podrían sumar más escáneres, pero para el ejercicio me parece suficiente.
+  https://github.com/DrCoffee84/devsu-danielboullon-devops/actions/runs/44578179451
+- Con la imagen ya publicada en GitHub Container Registry, doy el CI por terminado.
 
-- Hice los tres cambios y ruff ya pasa en local. 
+## 3. Kubernetes
 
-- volvio a fallar el pipeline pero ahora por temas de seguridad trivy detecto fallas en las dependencias de Python, detalles: https://github.com/DrCoffee84/devsu-danielboullon-devops/actions/runs/44570413788/job/135723593993
+Antes del CD tengo algunos problemas que resolver:
 
+1. No tengo dónde desplegar → armo un laboratorio local de Kubernetes.
+2. Uso Docker Desktop porque estoy en Windows, y un nodo para 2 pods me alcanza y sobra.
+3. Tengo que definir dónde viven los manifiestos. La carpeta de la app, en teoría, es del dev; salvo ayudarlo con los Dockerfile (por PR o dejando una plantilla decente), no quiero tocar su repo. Entonces creo una carpeta gitops que simula un repositorio aparte. Acá queda todo junto para que sea más fácil de evaluar.
 
-- Listo se corrigio los errores de trivy , ahora la imagen es segura (mas segura que antes), se podria poner mas escaneres, o jugar un poco mas , pero creo que el punto esta bien. https://github.com/DrCoffee84/devsu-danielboullon-devops/actions/runs/44578179451
+Decisiones:
 
-- Siguietne paso: Una vez que tengo mi imagen en mi repositorio (GitHub Container Registry)
+- Nomenclatura `<nombreDeApp>-gitops`. En una empresa esto lo podría crear el IDP.
+- Como la imagen es pública, el Deployment la usa directo, sin `imagePullSecret`.
+- Usé la IA para armar Kustomize con base y overlays. No me gustó que pusiera el namespace en la base: para mí cada overlay es un ambiente, y cada ambiente es un namespace con el ambiente como sufijo (`app-python-local`, `app-python-dev`, `app-python-prod`). Esto también lo podría automatizar el IDP. Más adelante quizás saque la DB a otro namespace.
+- Reviso el render con `kubectl kustomize overlays/local`.
+- Prefiero crear primero el namespace; me parece menos propenso a errores:
 
-Considero que la parte de CI ya esta y voy a pasar a la parte de CD
-
-pero tengo varios probelmas
-
-1. No un lugar donde desplegar, entonces voy a crear un laboratio local de k8s
-2. Para eso voy a usar docker desktop, ya que mi pc es windows y con un nodo para 2 pods me alcanza y sobra 
-3. SI uso k8s, debo definir tambien como voy de deployar esto, en la caprtea de la app, teoricamente es del dev, salvo ayudarlo con los Dockerfile (via PR o dejando una plantilla decente como punto de partida) no me gustaria tocar su repositorio, entonces voy a crear una carpeta de gitops simulando un repositorio extra (en esta practica dejo todo en unlugar para uqe sea mas facil evalular) donde estaran los archivos necesraios para hacer el deploy en kubernetes 
-
-Para crear estas caperta me gusta tener una nomenclatura que sea $nombreDeApp-gitops, esto se puede crear apartir de IDP de la empresa. 
-
-Como la imagen esta publica voy a crear el deploymente con la imagen publica.
-
-Use la ia para crear los archivos de kuztomice base y overlay, pero no me gusto que haya puesto el namespace en base, ya uqe me gusta considerar cada overlay como una ambiente y cada ambiente en k8s me gustar representarlos con un post fijo en el namespace de la app, quizas luego instancie la DB fuera de del namespace.  Esto lo peude hacer tranquilamente el IDP de forma automatica
-
-aplicio el kubectl kustomize overlays/local
-
-pero para mi es buena practica primero crear el namespace, siento que es meno propenso a erroes
-
-$kubectl apply -f app-python-gitops/overlays/local/namespace.yaml
+```
+$ kubectl apply -f app-python-gitops/overlays/local/namespace.yaml
 namespace/app-python-local created
 
 $ kubectl apply -k app-python-gitops/overlays/local
@@ -95,41 +99,56 @@ deployment.apps/app-python created
 poddisruptionbudget.policy/app-python created
 horizontalpodautoscaler.autoscaling/app-python created
 ingress.networking.k8s.io/app-python created
+```
 
+Los pods corren bien:
 
-veo que los pods corren bien 
+```
 $ kubectl get pods -n app-python-local
 NAME                          READY   STATUS    RESTARTS   AGE
 app-python-69b46b558f-c9fbc   1/1     Running   0          69s
 app-python-69b46b558f-df2hw   1/1     Running   0          69s
+```
 
-Y el servicio responde bien en local:
-$  curl.exe http://app-python.localhost/api/users/1/ -v
-*   Trying 127.0.0.1:80...
-* Connected to app-python.localhost (127.0.0.1) port 80 (#0)
-> GET /api/users/1/ HTTP/1.1
-> Host: app-python.localhost
-> User-Agent: curl/8.0.1
-> Accept: */*
-> 
-< HTTP/1.1 200 OK
-< Date: Thu, 19 Nov 2026 18:23:22 GMT
-< Content-Type: application/json
-< Content-Length: 49
-< Connection: keep-alive
-< Vary: Accept, Cookie
-< Allow: GET, PUT, PATCH, DELETE, HEAD, OPTIONS
-< X-Frame-Options: DENY
-< X-Content-Type-Options: nosniff
-< Referrer-Policy: same-origin
-< Cross-Origin-Opener-Policy: same-origin
-< 
-{"id":1,"dni":"12341234","name":"Akira Toriyama"}* Connection #0 to host app-python.localhost left intact
+Y el servicio responde por el Ingress:
 
----
-#### CD
+```
+$ curl.exe http://app-python.localhost/api/users/1/
+HTTP/1.1 200 OK
+{"id":1,"dni":"12341234","name":"Akira Toriyama"}
+```
 
-Bien ahora voy hacer el CD aca voy a empezar definir la buenas pracitcas y mi motivaciones, yo pienso siempre en un BUILD N deploys
-la idea es usar la rama main para hacer el dpeloy a dev y a prod, 
-Porque? porque usariamos aprobovadores de github y solo subimos a prod cosas que ya estan probadas en otro ambiente (dev, pero tambien podria ser test y stage, auqneu actualemten ya no se usan 4 ambientes sino 2 en las empresas, y algunas ya estan probando directo en produccion como una practica)
+## 4. CD
+
+- Siempre pienso en **1 build → N deploys**: la imagen se construye una sola vez y se promueve la misma a cada ambiente.
+- Uso la rama principal para desplegar a dev y a prod.
+- ¿Por qué? Porque con los aprobadores de los Environments de GitHub solo llega a prod lo que ya se probó en otro ambiente (dev; también podrían ser test y stage). Hoy la mayoría de las empresas usa 2 ambientes en vez de 4, y algunas ya prueban directo en producción.
+
+## 5. Pendientes
+
+Con todo andando, repasé lo que me fui anotando en el camino y lo que dejé "para después". Algunas cosas las fui parchando para avanzar y ahora las cierro bien.
+
+### Lo que resolví
+
+- **Healthchecks**: había dicho que los iba a agregar y las probes seguían pegándole a `/api/users/`, que consulta la base. Si se cae la DB, Kubernetes reiniciaría todos los pods sin motivo. Agregué dos endpoints:
+  - `/healthz` para liveness: solo dice que el proceso responde.
+  - `/readyz` para readiness: además chequea la base; si falla, el pod sale del Service pero no se reinicia.
+  - Los puse en un middleware al principio de la cadena para que respondan sin validar el Host, porque el kubelet llega con la IP del pod.
+- **DEBUG y ALLOWED_HOSTS**: estaban fijos en el código (`DEBUG=True`, `ALLOWED_HOSTS=[]`) y lo había parchado forzando `Host: localhost` en probes e Ingress. No me gustaba. Ahora salen de variables de entorno (`DJANGO_DEBUG`, `DJANGO_ALLOWED_HOSTS`), cada overlay pone su dominio en el ConfigMap y saqué el parche.
+- **Base de datos**: SQLite en un `emptyDir` significa que cada pod tiene su propia base. Con 2 réplicas, creás un usuario en un pod y el otro no lo ve. Lo cambié a Postgres:
+  - La app lee `DATABASE_URL`; si no está, sigue usando SQLite (así no rompo el uso local ni los tests).
+  - En local agregué un StatefulSet de Postgres con su volumen.
+  - En dev/prod la URL viene de Vault, pensando en una base gestionada (RDS).
+  - Toqué lo mínimo del código de la app: settings y un middleware.
+- **Migraciones**: había dicho que no las quería en el Dockerfile y al final la imagen corría `migrate` al arrancar. Lo saqué del `CMD` y ahora las corre un initContainer antes de cada pod. Con `maxSurge: 1` en un rollout migra un pod a la vez. En el primer deploy pueden chocar dos pods, pero el initContainer se reinicia y sigue; para algo más serio lo pasaría a un Job o a un paso del CD.
+- **Tests**: agregué tests para los health checks y para que un Host desconocido se rechace. La cobertura quedó arriba del 95%.
+
+### Lo que dejo pendiente
+
+- **IaC (punto extra)**: no lo hice. Prioricé que la imagen, Kubernetes y el pipeline quedaran bien.
+- **Deploy desde el pipeline**: el CD está armado, pero GitHub Actions no llega a mi cluster local. Sin `KUBE_CONFIG` renderiza y valida, pero no aplica.
+- **DNS y TLS reales**: los Ingress de dev/prod usan `*.example.com`. Con un dominio real, cert-manager y Let's Encrypt ya están preparados.
+- **Permisos del CD**: hoy usaría el kubeconfig que le pase. Lo correcto es un ServiceAccount con permisos acotados a su namespace.
+- **GitOps de verdad**: armé la carpeta como si fuera un repo gitops, pero el que aplica es el pipeline. El paso siguiente sería Argo CD o Flux.
+- **Backups de la base**: en local no hay; en prod los daría la base gestionada.
 
