@@ -4,7 +4,7 @@ Manifiestos Kustomize de `app-python` y cómo los despliega el CD.
 
 ```
 base/                 Deployment, Service, HPA, PDB, ServiceAccount, ConfigMap
-overlays/local/       laboratorio en Docker Desktop (secretGenerator, tag latest)
+overlays/local/       laboratorio en Docker Desktop (Postgres propio, secretGenerator, tag latest)
 overlays/dev/         entorno dev  → namespace app-python-dev
 overlays/prod/        entorno prod → namespace app-python-prod
 ```
@@ -16,6 +16,8 @@ overlays/prod/        entorno prod → namespace app-python-prod
 | Recursos | los de la base | 250m/256Mi → 1 CPU/512Mi |
 | Spread | por nodo | por nodo y por zona |
 | Secretos | ExternalSecret `app-python/dev` | ExternalSecret `app-python/prod` |
+| Base de datos | gestionada, `DATABASE_URL` desde Vault | igual |
+| Hosts | `DJANGO_ALLOWED_HOSTS` = dominio del Ingress | igual |
 | Red | deny-all + solo ingress-nginx → 8000 | igual |
 | TLS | cert-manager `letsencrypt-staging` | cert-manager `letsencrypt-prod` |
 
@@ -102,10 +104,18 @@ kubectl rollout undo deployment/app-python -n app-python-prod --to-revision=<N>
 
 El próximo deploy desde el CD vuelve a dejar el cluster como dice git más el tag elegido.
 
-## Limitaciones conocidas de la app (no del despliegue)
+## Base de datos y migraciones
 
-- SQLite en `emptyDir`: cada pod tiene su propia base y se pierde al reiniciar.
-  Para prod real hace falta una base externa (p. ej. Postgres/RDS).
-- `DEBUG=True` y `ALLOWED_HOSTS=[]` están fijos en `settings.py`; por eso las
-  probes y el Ingress fuerzan `Host: localhost`.
-- La imagen corre `migrate` al arrancar; en prod las migraciones deberían ir en un Job aparte.
+- La app usa `DATABASE_URL` (Postgres). En local hay un StatefulSet `postgres`
+  con un PVC de 1Gi; en dev/prod la URL apunta a una base gestionada.
+- Las migraciones las corre el initContainer `migrate` antes de que arranque
+  cada pod. Con `maxSurge: 1` en un rollout solo migra un pod nuevo a la vez.
+- Las migraciones tienen que ser compatibles hacia atrás: durante el rollout
+  conviven pods viejos con el esquema nuevo.
+
+## Health checks
+
+- `/healthz` (startup y liveness): el proceso responde, no toca la base.
+- `/readyz` (readiness): además hay conexión a la base.
+- Los dos responden antes de la validación de `ALLOWED_HOSTS`, por eso las
+  probes del kubelet funcionan sin forzar el header `Host`.

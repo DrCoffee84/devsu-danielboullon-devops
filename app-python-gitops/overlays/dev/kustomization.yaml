@@ -18,6 +18,12 @@ labels:
 # El CD la reemplaza en el runner con `kustomize edit set image` antes de
 # aplicar (no se commitea). El valor de acá es solo el último conocido, para
 # poder renderizar el overlay localmente. Nunca `latest`: siempre short SHA.
+configMapGenerator:
+  - name: app-python-config
+    behavior: merge
+    literals:
+      - DJANGO_ALLOWED_HOSTS=app-python.dev.example.com
+
 images:
   - name: ghcr.io/drcoffee84/devsu-danielboullon-devops
     newTag: 88dc298

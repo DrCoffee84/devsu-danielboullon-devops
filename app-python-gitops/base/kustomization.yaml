@@ -15,8 +15,9 @@ resources:
   - hpa.yaml
   - pdb.yaml
 
+# Config no sensible. Cada overlay suma DJANGO_ALLOWED_HOSTS con su dominio.
+# DATABASE_URL tiene credenciales, por eso va en el Secret de cada overlay.
 configMapGenerator:
   - name: app-python-config
     literals:
-      # Ruta absoluta dentro del emptyDir /data (el rootfs es de solo lectura).
-      - DATABASE_NAME=/data/db.sqlite3
+      - DJANGO_DEBUG=False

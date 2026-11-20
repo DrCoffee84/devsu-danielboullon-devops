@@ -33,6 +33,33 @@ spec:
           labelSelector:
             matchLabels:
               app.kubernetes.io/component: api
+      initContainers:
+        # Migraciones antes de levantar la app. Con maxSurge: 1 en un rollout
+        # solo migra un pod nuevo a la vez. Si en el primer deploy dos pods
+        # migran juntos y uno choca, el initContainer se reinicia y sigue.
+        - name: migrate
+          image: ghcr.io/drcoffee84/devsu-danielboullon-devops
+          command: ["python", "manage.py", "migrate", "--noinput"]
+          envFrom:
+            - configMapRef:
+                name: app-python-config
+            - secretRef:
+                name: app-python-secret
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
       containers:
         - name: api
           image: ghcr.io/drcoffee84/devsu-danielboullon-devops
@@ -56,33 +83,24 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
-          # Django tiene ALLOWED_HOSTS=[] y DEBUG=True en el código: solo
-          # acepta Host=localhost, por eso las probes lo envían explícitamente.
+          # /healthz no toca la base: si la DB se cae, no se reinician los pods.
+          # /readyz sí la chequea: un pod sin DB sale del Service.
           startupProbe:
             httpGet:
-              path: /api/users/
+              path: /healthz
               port: http
-              httpHeaders:
-                - name: Host
-                  value: localhost
             periodSeconds: 5
             failureThreshold: 12
           readinessProbe:
             httpGet:
-              path: /api/users/
+              path: /readyz
               port: http
-              httpHeaders:
-                - name: Host
-                  value: localhost
             periodSeconds: 10
             timeoutSeconds: 3
           livenessProbe:
             httpGet:
-              path: /api/users/
+              path: /healthz
               port: http
-              httpHeaders:
-                - name: Host
-                  value: localhost
             periodSeconds: 20
             timeoutSeconds: 5
           lifecycle:
@@ -91,15 +109,9 @@ spec:
               exec:
                 command: ["sleep", "5"]
           volumeMounts:
-            - name: data
-              mountPath: /data
             - name: tmp
               mountPath: /tmp
       volumes:
-        # SQLite efímero por pod: válido para el laboratorio, no para producción.
-        - name: data
-          emptyDir:
-            sizeLimit: 100Mi
         - name: tmp
           emptyDir:
             sizeLimit: 50Mi

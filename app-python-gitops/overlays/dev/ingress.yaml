@@ -3,8 +3,6 @@ kind: Ingress
 metadata:
   name: app-python
   annotations:
-    # Django solo acepta Host=localhost (ALLOWED_HOSTS=[] en el código).
-    nginx.ingress.kubernetes.io/upstream-vhost: localhost
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     cert-manager.io/cluster-issuer: letsencrypt-staging
 spec:

@@ -2,9 +2,6 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: app-python
-  annotations:
-    # Django solo acepta Host=localhost (ALLOWED_HOSTS=[] en el código).
-    nginx.ingress.kubernetes.io/upstream-vhost: localhost
 spec:
   ingressClassName: nginx
   rules:

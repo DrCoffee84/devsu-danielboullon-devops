@@ -6,20 +6,33 @@ namespace: app-python-local
 resources:
   - namespace.yaml
   - ../../base
+  - postgres.yaml
   - ingress.yaml
 
 labels:
   - pairs:
       app.kubernetes.io/environment: local
 
+configMapGenerator:
+  - name: app-python-config
+    behavior: merge
+    literals:
+      - DJANGO_ALLOWED_HOSTS=app-python.localhost,localhost
+
 images:
   - name: ghcr.io/drcoffee84/devsu-danielboullon-devops
     newTag: latest
 
-# Para simplificar el laboratorio se usa secretGenerator con un valor de prueba.
-# En producción los secretos vivirían en HashiCorp Vault y External Secrets
-# Operator los sincronizaría como Secret de Kubernetes.
+# Para simplificar el laboratorio se usa secretGenerator con valores de prueba.
+# En dev/prod los secretos viven en Vault y External Secrets Operator los
+# sincroniza como Secret de Kubernetes.
 secretGenerator:
   - name: app-python-secret
     literals:
       - DJANGO_SECRET_KEY=local-lab-not-a-real-secret
+      - DATABASE_URL=postgres://app:local-lab-not-a-real-password@postgres:5432/app
+  - name: postgres-secret
+    literals:
+      - POSTGRES_USER=app
+      - POSTGRES_DB=app
+      - POSTGRES_PASSWORD=local-lab-not-a-real-password
