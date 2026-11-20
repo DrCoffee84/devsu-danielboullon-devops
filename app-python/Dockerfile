@@ -38,6 +38,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONFAULTHANDLER=1 \
     PATH="/opt/venv/bin:${PATH}" \
     APP_PORT=8000 \
+    DATABASE_NAME=/data/db.sqlite3 \
     GUNICORN_CMD_ARGS="--bind=0.0.0.0:8000 --workers=2 --threads=2 --timeout=30 --graceful-timeout=20 --worker-tmp-dir=/dev/shm --access-logfile=- --error-logfile=-"
 
 ARG APP_UID
@@ -53,20 +54,20 @@ COPY manage.py ./
 COPY demo/ ./demo/
 COPY api/ ./api/
 
-# El código queda de root (solo lectura); el usuario app solo puede escribir
-# en el directorio /app, que es donde SQLite crea db.sqlite3 y su journal.
+# El código queda de root (solo lectura). El usuario app solo escribe en /data,
+# que es donde va SQLite cuando no hay DATABASE_URL (uso local con docker run).
 RUN python -m compileall -q /app \
- && chown "${APP_UID}:${APP_GID}" /app
+ && mkdir -p /data \
+ && chown "${APP_UID}:${APP_GID}" /data
 
 USER ${APP_UID}:${APP_GID}
 
 EXPOSE 8000
 
+# /healthz no toca la base: solo dice si el proceso responde.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD ["python", "-c", "import os,sys,urllib.request; port=os.environ.get('APP_PORT','8000'); sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{port}/api/users/', timeout=4).status == 200 else 1)"]
+    CMD ["python", "-c", "import os,sys,urllib.request; port=os.environ.get('APP_PORT','8000'); sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{port}/healthz', timeout=4).status == 200 else 1)"]
 
-# Demo: aplica migraciones al arrancar y luego levanta gunicorn.
-CMD ["sh", "-c", "python manage.py migrate --noinput && exec gunicorn demo.wsgi:application"]
-
-# Producción: las migraciones van aparte (Job), sin migrate acá.
-# CMD ["gunicorn", "demo.wsgi:application"]
+# Las migraciones no corren al arrancar: en Kubernetes las hace un initContainer
+# y en local se corren a mano (ver README).
+CMD ["gunicorn", "demo.wsgi:application"]
