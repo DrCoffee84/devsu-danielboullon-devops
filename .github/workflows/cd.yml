@@ -85,6 +85,8 @@ jobs:
     name: Deploy Dev
     needs: resolve
     if: needs.resolve.outputs.deploy_dev == 'true'
+    permissions:
+      contents: write # el reusable commitea el tag en el overlay
     concurrency:
       group: cd-dev
       cancel-in-progress: false
@@ -103,6 +105,8 @@ jobs:
       needs.resolve.result == 'success' &&
       needs.resolve.outputs.deploy_prod == 'true' &&
       (needs.deploy-dev.result == 'success' || needs.deploy-dev.result == 'skipped')
+    permissions:
+      contents: write # el reusable commitea el tag en el overlay
     concurrency:
       group: cd-prod
       cancel-in-progress: false

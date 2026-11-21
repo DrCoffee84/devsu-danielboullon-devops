@@ -87,7 +87,7 @@ jobs:
       - name: Render manifests
         run: |
           kustomize build "$OVERLAY_DIR" > "$RENDERED"
-          grep -q "${IMAGE}:${IMAGE_TAG}" "$RENDERED"
+          grep -qF "${IMAGE}:${IMAGE_TAG}" "$RENDERED"
 
       - name: Upload rendered manifests
         uses: actions/upload-artifact@v4

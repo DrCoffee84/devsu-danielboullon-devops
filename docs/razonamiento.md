@@ -153,12 +153,17 @@ Con todo andando, repasé lo que me fui anotando en el camino y lo que dejé "pa
 - **Backups de la base**: en local no hay; en prod los daría la base gestionada.
 
 
-### Sigo, hoy es otro dia, tengo un hueco libre para terminar este ejercicio
+### Sigo, hoy es otro día: cierro el CD con GitOps
 
-Bueno probe el pipeline de CD, ahora esta mokeado ya que no tengo un cluster vivo de k8s, pero hace una buena representacion, al pipeline de CD, le agregaria como dije antes
-ArgoCD, no me gusta usar el "auto-sync" suele haber problemas bajo mi experiencia, prefiero que sae algo controlado y lanzar el comando via CLI desde el pipeline. 
+Probé el pipeline de CD de punta a punta. El apply está mockeado porque no tengo un cluster de k8s vivo al que GitHub Actions pueda llegar, pero el flujo es el real: https://github.com/DrCoffee84/devsu-danielboullon-devops/actions/runs/44813163928
 
-https://github.com/DrCoffee84/devsu-danielboullon-devops/actions/runs/44813163928
+Revisando el diseño me di cuenta de que había algo mal: dev y prod no seguían el mismo criterio. El tag se cambiaba en el runner con `kustomize edit set image` y se aplicaba sin commitear, así que lo desplegado vivía solo en memoria del job y el repo no decía qué versión corría en cada ambiente. Lo cambié para que haya un único flujo GitOps para los dos:
 
+- `cd.yml` resuelve el tag (short SHA), verifica que la imagen exista en GHCR y llama a `_deploy.yml` una vez por ambiente: dev automático y prod después de dev, con la aprobación del Environment.
+- `_deploy.yml` hace lo mismo en dev y en prod: checkout de `master`, `kustomize edit set image` en `overlays/<env>`, commit `chore(<env>): set image tag <sha> [skip ci]`, `git pull --rebase` y push a `master`. Recién después renderiza con `kustomize build`, sube el manifiesto como artifact y, si el Environment tiene `KUBE_CONFIG`, aplica y espera el `rollout status`.
 
-Me di cuenta que la IA me hizo algo mal en el diseño del pipeline, entonces lo cambie, hay solo un mismo criterio GitOps tanto para **dev** como para **prod**, sin atajos ni estados mutados solo en memoria. En ambos entornos el pipeline actualiza el `newTag` en el `kustomization.yaml` del overlay correspondiente y hace el `git commit` + `git push` incluyendo `[skip ci]` para evitar loops de CI. *De esa manera Git es siempre la única fuente de verdad* con el tag exacto desplegado en cada ambiente, y al sumar Argo CD el pipeline solo tendría que disparar el `argocd app sync` controlado contra ese estado del repo.
+¿Por qué commitear en los dos ambientes? Porque así **Git es la única fuente de verdad**: el `newTag` de cada `kustomization.yaml` es exactamente lo que está desplegado, el historial de `master` es el historial de deploys y un rollback es volver a un commit (o relanzar el CD con un tag anterior). El `[skip ci]` evita el loop: sin eso, el commit del CD dispararía el CI, que dispararía el CD otra vez. El `pull --rebase` antes del push es para que el commit de prod no choque con el de dev, que se pushea unos minutos antes.
+
+Los permisos los dejé al mínimo: `permissions: {}` global en `cd.yml`, `packages: read` solo para el job que consulta GHCR y `contents: write` explícito en los jobs que llaman al reusable. Un workflow reusable no puede pedir más permisos de los que le da quien lo llama; sin ese `contents: write` en el caller, GitHub corta el run con un `Startup failure` antes de arrancar.
+
+El paso siguiente sería sumar Argo CD. No me gusta el `auto-sync`: por experiencia trae sorpresas (syncs en momentos que nadie eligió, drift que se pisa sin que nadie lo mire). Prefiero que el deploy sea algo controlado. Con este diseño el cambio es chico: el pipeline sigue commiteando el tag igual que ahora y, en lugar del `kubectl apply`, dispara por CLI el sync contra ese commit, algo como `argocd app sync app-python-<env> --revision <sha-del-commit>` seguido de `argocd app wait app-python-<env> --health --timeout 300`. Argo CD lee el estado de Git, el pipeline solo decide cuándo, y queda registrado quién y qué se desplegó.
