@@ -14,28 +14,19 @@ labels:
   - pairs:
       app.kubernetes.io/environment: prod
 
-# Versión desplegada en prod. Mismo repositorio GHCR que dev, tag propio.
-# El CD la reemplaza en el runner con `kustomize edit set image` antes de
-# aplicar (no se commitea). El valor de acá es solo el último conocido, para
-# poder renderizar el overlay localmente. Nunca `latest`: siempre short SHA.
 configMapGenerator:
   - name: app-python-config
     behavior: merge
     literals:
-      - DJANGO_ALLOWED_HOSTS=app-python.example.com
+      - DJANGO_ALLOWED_HOSTS=app-python.prod.example.com
 
 images:
-  - name: ghcr.io/drcoffee84/devsu-danielboullon-devops
+  - name: ghcr.io/drcoffee84/prodsu-danielboullon-prodops
     newTag: 88dc298
 
 patches:
-  - path: patches/deployment.yaml
   - path: patches/hpa.yaml
   - path: patches/pdb.yaml
-  # El HPA es dueño de las réplicas: si el Deployment declara `replicas`,
-  # cada deploy pisaría el valor escalado por el HPA.
-  # Ojo: sacar `replicas` de un Deployment que ya lo tenía aplicado lo baja a 1
-  # en el próximo apply; acá es seguro porque el namespace nace con este overlay.
   - target:
       kind: Deployment
       name: app-python

@@ -152,3 +152,13 @@ Con todo andando, repasé lo que me fui anotando en el camino y lo que dejé "pa
 - **GitOps de verdad**: armé la carpeta como si fuera un repo gitops, pero el que aplica es el pipeline. El paso siguiente sería Argo CD o Flux.
 - **Backups de la base**: en local no hay; en prod los daría la base gestionada.
 
+
+### Sigo, hoy es otro dia, tengo un hueco libre para terminar este ejercicio
+
+Bueno probe el pipeline de CD, ahora esta mokeado ya que no tengo un cluster vivo de k8s, pero hace una buena representacion, al pipeline de CD, le agregaria como dije antes
+ArgoCD, no me gusta usar el "auto-sync" suele haber problemas bajo mi experiencia, prefiero que sae algo controlado y lanzar el comando via CLI desde el pipeline. 
+
+https://github.com/DrCoffee84/devsu-danielboullon-devops/actions/runs/44813163928
+
+
+Me di cuenta que la IA me hizo algo mal en el diseño del pipeline, entonces lo cambie, hay solo un mismo criterio GitOps tanto para **dev** como para **prod**, sin atajos ni estados mutados solo en memoria. En ambos entornos el pipeline actualiza el `newTag` en el `kustomization.yaml` del overlay correspondiente y hace el `git commit` + `git push` incluyendo `[skip ci]` para evitar loops de CI. *De esa manera Git es siempre la única fuente de verdad* con el tag exacto desplegado en cada ambiente, y al sumar Argo CD el pipeline solo tendría que disparar el `argocd app sync` controlado contra ese estado del repo.

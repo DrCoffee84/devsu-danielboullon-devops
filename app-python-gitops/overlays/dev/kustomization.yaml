@@ -14,10 +14,6 @@ labels:
   - pairs:
       app.kubernetes.io/environment: dev
 
-# Versión desplegada en dev. Mismo repositorio GHCR que prod, tag propio.
-# El CD la reemplaza en el runner con `kustomize edit set image` antes de
-# aplicar (no se commitea). El valor de acá es solo el último conocido, para
-# poder renderizar el overlay localmente. Nunca `latest`: siempre short SHA.
 configMapGenerator:
   - name: app-python-config
     behavior: merge
@@ -31,7 +27,6 @@ images:
 patches:
   - path: patches/hpa.yaml
   - path: patches/pdb.yaml
-  # El HPA es dueño de las réplicas (ver overlays/prod/kustomization.yaml).
   - target:
       kind: Deployment
       name: app-python
