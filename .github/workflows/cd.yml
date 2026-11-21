@@ -1,119 +1,114 @@
-name: Deploy (reusable)
+name: CD
 
 on:
-  workflow_call:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [master]
+
+  workflow_dispatch:
     inputs:
       environment:
-        description: GitHub Environment y overlay de kustomize (dev | prod)
-        type: string
-        required: true
-      image:
-        description: Repositorio de la imagen en GHCR (sin tag)
-        type: string
+        description: Entorno destino
+        type: choice
+        options: [dev, prod]
+        default: dev
         required: true
       image_tag:
-        description: Tag inmutable a desplegar (short SHA)
+        description: Tag de GHCR (short SHA, 7+ hex). Vacío = SHA actual.
         type: string
-        required: true
+        required: false
 
-permissions:
-  contents: read
-
-env:
-  APP_NAME: app-python
-  KUBECTL_VERSION: v1.31.4
-  KUSTOMIZE_VERSION: v5.5.0
-  ROLLOUT_TIMEOUT: 300s
+permissions: {}
 
 jobs:
-  deploy:
-    name: Deploy to ${{ inputs.environment }}
+  resolve:
+    name: Resolve and verify image
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     permissions:
-      contents: write
-    environment:
-      name: ${{ inputs.environment }}
-      url: ${{ vars.APP_URL }}
-
-    env:
-      ENVIRONMENT: ${{ inputs.environment }}
-      IMAGE: ${{ inputs.image }}
-      IMAGE_TAG: ${{ inputs.image_tag }}
-      OVERLAY_DIR: app-python-gitops/overlays/${{ inputs.environment }}
-      NAMESPACE: app-python-${{ inputs.environment }}
-      RENDERED: ${{ github.workspace }}/rendered-${{ inputs.environment }}.yaml
-
+      packages: read
+    outputs:
+      image: ${{ steps.resolve.outputs.image }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      deploy_dev: ${{ steps.resolve.outputs.deploy_dev }}
+      deploy_prod: ${{ steps.resolve.outputs.deploy_prod }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: master
-          fetch-depth: 0
-
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@v4
-        with:
-          version: ${{ env.KUBECTL_VERSION }}
-
-      - name: Setup kustomize
-        run: |
-          curl -fsSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" \
-            | tar -xz -C "$RUNNER_TEMP" kustomize
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/kustomize" version
-
-      - name: Update image tag in overlay
-        working-directory: ${{ env.OVERLAY_DIR }}
-        run: |
-          kustomize edit set image "${IMAGE}:${IMAGE_TAG}"
-          cat kustomization.yaml
-
-      - name: Commit and push GitOps state
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          if git diff --quiet -- "${OVERLAY_DIR}/kustomization.yaml"; then
-            echo "Sin cambios en ${OVERLAY_DIR}/kustomization.yaml"
-            exit 0
-          fi
-
-          git add "${OVERLAY_DIR}/kustomization.yaml"
-          git commit -m "chore(${ENVIRONMENT}): set image tag ${IMAGE_TAG} [skip ci]"
-          git pull --rebase origin master
-          git push origin HEAD:master
-
-      - name: Render manifests
-        run: |
-          kustomize build "$OVERLAY_DIR" > "$RENDERED"
-          grep -q "${IMAGE}:${IMAGE_TAG}" "$RENDERED"
-
-      - name: Upload rendered manifests
-        uses: actions/upload-artifact@v4
-        with:
-          name: rendered-${{ inputs.environment }}-${{ inputs.image_tag }}
-          path: ${{ env.RENDERED }}
-          retention-days: 30
-
-      - name: Configure cluster access
-        id: kube
+      - name: Resolve tag and targets
+        id: resolve
         env:
-          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+          EVENT: ${{ github.event_name }}
+          CI_SHA: ${{ github.event.workflow_run.head_sha }}
+          INPUT_ENV: ${{ inputs.environment }}
+          INPUT_TAG: ${{ inputs.image_tag }}
         run: |
-          if [ -z "$KUBE_CONFIG" ]; then
-            echo "::warning::KUBE_CONFIG no definido en '${ENVIRONMENT}'; se omite aplicación en clúster."
-            echo "apply=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          KUBECONFIG_FILE="$RUNNER_TEMP/kubeconfig"
-          echo "$KUBE_CONFIG" | base64 -d > "$KUBECONFIG_FILE"
-          chmod 600 "$KUBECONFIG_FILE"
-          echo "KUBECONFIG=$KUBECONFIG_FILE" >> "$GITHUB_ENV"
-          echo "apply=true" >> "$GITHUB_OUTPUT"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
 
-      - name: Apply manifests and verify rollout
-        if: steps.kube.outputs.apply == 'true'
+          if [ "$EVENT" = "workflow_run" ]; then
+            TAG="${CI_SHA::7}"
+            DEPLOY_DEV=true
+            DEPLOY_PROD=true
+          else
+            TAG="${INPUT_TAG:-${GITHUB_SHA::7}}"
+            DEPLOY_DEV=$([ "$INPUT_ENV" = "dev" ] && echo true || echo false)
+            DEPLOY_PROD=$([ "$INPUT_ENV" = "prod" ] && echo true || echo false)
+
+            if [ "$DEPLOY_PROD" = "true" ] && [ "$GITHUB_REF" != "refs/heads/master" ]; then
+              echo "::error::prod solo puede desplegarse desde master."
+              exit 1
+            fi
+          fi
+
+          if ! [[ "$TAG" =~ ^[0-9a-f]{7,40}$ ]]; then
+            echo "::error::Tag inválido '$TAG'. Debe ser un SHA hexadecimal."
+            exit 1
+          fi
+
+          {
+            echo "image=$IMAGE"
+            echo "tag=$TAG"
+            echo "deploy_dev=$DEPLOY_DEV"
+            echo "deploy_prod=$DEPLOY_PROD"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify image exists in GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          REF: ${{ steps.resolve.outputs.image }}:${{ steps.resolve.outputs.tag }}
         run: |
-          kubectl apply -f "$RENDERED"
-          kubectl rollout status "deployment/${APP_NAME}" -n "$NAMESPACE" --timeout="$ROLLOUT_TIMEOUT"
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          docker buildx imagetools inspect "$REF" > /dev/null
+
+  deploy-dev:
+    name: Deploy Dev
+    needs: resolve
+    if: needs.resolve.outputs.deploy_dev == 'true'
+    concurrency:
+      group: cd-dev
+      cancel-in-progress: false
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment: dev
+      image: ${{ needs.resolve.outputs.image }}
+      image_tag: ${{ needs.resolve.outputs.tag }}
+    secrets: inherit
+
+  deploy-prod:
+    name: Deploy Prod
+    needs: [resolve, deploy-dev]
+    if: >-
+      always() &&
+      needs.resolve.result == 'success' &&
+      needs.resolve.outputs.deploy_prod == 'true' &&
+      (needs.deploy-dev.result == 'success' || needs.deploy-dev.result == 'skipped')
+    concurrency:
+      group: cd-prod
+      cancel-in-progress: false
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment: prod
+      image: ${{ needs.resolve.outputs.image }}
+      image_tag: ${{ needs.resolve.outputs.tag }}
+    secrets: inherit
