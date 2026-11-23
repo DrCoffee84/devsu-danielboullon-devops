@@ -69,7 +69,7 @@ Separo en dos pipelines:
   https://github.com/DrCoffee84/devsu-danielboullon-devops/actions/runs/44578179451
 - Con la imagen ya publicada en GitHub Container Registry, doy el CI por terminado.
 
-> TODO: poner imagen del CI en verde (Actions → CI → última corrida, con los 6 pasos a la vista).
+![ci](screenshots/ci.png)
 
 ## 3. Kubernetes
 
@@ -120,20 +120,18 @@ HTTP/1.1 200 OK
 {"id":1,"dni":"12341234","name":"Akira Toriyama"}
 ```
 
-> TODO: poner imagen de los recursos levantados:
-> ```
-> kubectl get pods,svc,hpa,pdb,ingress -n app-python-local
-> ```
+![alt text](screenshots/app-python-local.png)
 
-> TODO: poner imagen del HPA escalando. En una terminal:
-> ```
-> kubectl get hpa -n app-python-local -w
-> ```
-> En otra, generar carga (en `default`, porque el namespace de la app es `restricted` y busybox corre como root):
-> ```
-> kubectl run load --rm -it --image=busybox:1.36 --restart=Never -- /bin/sh -c "while true; do wget -q -O- http://app-python.app-python-local/api/users/ > /dev/null; done"
-> ```
-> Capturar cuando pasa de 2 a 3 o más réplicas. Cortar con Ctrl+C y ver que baja.
+
+### Probe HPA
+
+
+![HPA up](screenshots/hpa_up.png)
+
+Estaba probando el  HPA y vi que no bajaba automaticamente, al poner gunicorn y la configuraciones del hpa en memory 80%, y  al ser una app simple y tener tan poca ram asignada, nunca bajaba de 5 porque el promedio de ram me daba 66% en 5 pods y hpa hace las cuentas y dice "si bajo a 4 me queda por arriba del 80% entonces no bajo"
+
+Si fuera producion real se haria un estudio de la app , memoria promedio y tope, resources y limits, pero como es un ejercicio simplemetne quito la ram del HPA y lo comiteo.
+
 
 ## 4. CD
 
@@ -186,6 +184,7 @@ Los permisos los dejé al mínimo: `permissions: {}` global en `cd.yml`, `packag
 
 El paso siguiente sería sumar Argo CD. No me gusta el `auto-sync`: por experiencia trae sorpresas (syncs en momentos que nadie eligió, drift que se pisa sin que nadie lo mire). Prefiero que el deploy sea algo controlado. Con este diseño el cambio es chico: el pipeline sigue commiteando el tag igual que ahora y, en lugar del `kubectl apply`, dispara por CLI el sync contra ese commit, algo como `argocd app sync app-python-<env> --revision <sha-del-commit>` seguido de `argocd app wait app-python-<env> --health --timeout 300`. Argo CD lee el estado de Git, el pipeline solo decide cuándo, y queda registrado quién y qué se desplegó.
 
-> TODO: poner imagen del CD completo: dev en verde, prod esperando aprobación y después aprobado.
+![cd wait](screenshots/cd_wait.png)
+![cd_approved](screenshots/cd_approved.png)
 
-> TODO: poner imagen de los commits del bot en `master` (`chore(dev): set image tag ...` y `chore(prod): ...`).
+https://github.com/DrCoffee84/devsu-danielboullon-devops/actions/runs/45216921482/job/137840646424

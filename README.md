@@ -65,7 +65,7 @@ flowchart LR
     svc --> p2[Pod api :8000]
     p1 --> db[(Postgres<br/>StatefulSet + PVC)]
     p2 --> db
-    hpa[HPA<br/>CPU 70% / mem 80%] -.escala.-> deploy[Deployment]
+    hpa[HPA<br/>CPU 70%] -.escala.-> deploy[Deployment]
     deploy --> p1
     deploy --> p2
     cm[ConfigMap] -.envFrom.-> p1
@@ -137,7 +137,7 @@ Kustomize: una `base/` y un overlay por ambiente (`local`, `dev`, `prod`).
 | initContainer `migrate` | corre las migraciones antes de cada pod |
 | Probes | liveness `/healthz`, readiness `/readyz` |
 | Service | ClusterIP, 80 → 8000 |
-| HPA | escala por CPU y memoria (2–5 base, 3–10 prod) |
+| HPA | escala por CPU (2–5 base, 3–10 prod). Sin memoria: con gunicorn no baja y el HPA no escalaba hacia abajo |
 | PDB | deja pods vivos durante un drain |
 | ConfigMap | `DJANGO_DEBUG`, `DJANGO_ALLOWED_HOSTS` |
 | Secret | local: `secretGenerator` · dev/prod: ExternalSecret desde Vault |
