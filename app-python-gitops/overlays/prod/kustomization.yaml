@@ -4,33 +4,33 @@ kind: Kustomization
 namespace: app-python-prod
 
 resources:
-  - namespace.yaml
-  - ../../base
-  - externalsecret.yaml
-  - networkpolicy.yaml
-  - ingress.yaml
+- namespace.yaml
+- ../../base
+- externalsecret.yaml
+- networkpolicy.yaml
+- ingress.yaml
 
 labels:
-  - pairs:
-      app.kubernetes.io/environment: prod
+- pairs:
+    app.kubernetes.io/environment: prod
 
 configMapGenerator:
-  - name: app-python-config
-    behavior: merge
-    literals:
-      - DJANGO_ALLOWED_HOSTS=app-python.example.com
+- behavior: merge
+  literals:
+  - DJANGO_ALLOWED_HOSTS=app-python.example.com
+  name: app-python-config
 
 images:
-  - name: ghcr.io/drcoffee84/devsu-danielboullon-devops
-    newTag: 88dc298
+- name: ghcr.io/drcoffee84/devsu-danielboullon-devops
+  newTag: d1c6790
 
 patches:
-  - path: patches/deployment.yaml
-  - path: patches/hpa.yaml
-  - path: patches/pdb.yaml
-  - target:
-      kind: Deployment
-      name: app-python
-    patch: |-
-      - op: remove
-        path: /spec/replicas
+- path: patches/deployment.yaml
+- path: patches/hpa.yaml
+- path: patches/pdb.yaml
+- patch: |-
+    - op: remove
+      path: /spec/replicas
+  target:
+    kind: Deployment
+    name: app-python
