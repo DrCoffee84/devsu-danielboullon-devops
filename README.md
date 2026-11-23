@@ -1,22 +1,35 @@
 # devsu-danielboullon-devops
 
-Ejercicio práctico DevOps de Devsu con la app `demo-devops-python` (Django + DRF): dockerizada, con pipeline CI/CD en GitHub Actions y desplegada en Kubernetes con Kustomize.
+Ejercicio DevOps de Devsu con la app `demo-devops-python` (Django + DRF).
+Dockerizada, con CI/CD en GitHub Actions y desplegada en Kubernetes con Kustomize.
 
-- Enunciado: [docs/enunciado.md](docs/enunciado.md)
-- Cómo fui pensando cada decisión: [docs/razonamiento.md](docs/razonamiento.md)
+## Dónde está cada cosa
 
-## Estructura
+| Qué | Dónde |
+|---|---|
+| App + Dockerfile | [app-python/](app-python/) |
+| Tests en contenedor | [app-python/Dockerfile.test](app-python/Dockerfile.test) |
+| CI | [.github/workflows/ci.yml](.github/workflows/ci.yml) |
+| CD | [.github/workflows/cd.yml](.github/workflows/cd.yml) + [_deploy.yml](.github/workflows/_deploy.yml) |
+| Manifiestos Kubernetes | [app-python-gitops/](app-python-gitops/) (simula un repo gitops aparte) |
+| Cómo se opera (rollback, aprobaciones) | [app-python-gitops/README.md](app-python-gitops/README.md) |
+| Cómo pensé cada decisión | [docs/razonamiento.md](docs/razonamiento.md) |
+| Enunciado | [docs/enunciado.md](docs/enunciado.md) |
+| Capturas | [docs/screenshots/](docs/screenshots/) |
 
-```
-app-python/            app Django + Dockerfile + Dockerfile.test
-app-python-gitops/     manifiestos Kustomize (simula un repo gitops aparte)
-  base/                Deployment, Service, HPA, PDB, ServiceAccount, ConfigMap
-  overlays/local/      laboratorio en Docker Desktop (con Postgres)
-  overlays/dev/        namespace app-python-dev
-  overlays/prod/       namespace app-python-prod
-.github/workflows/     ci.yml, cd.yml, _deploy.yml
-docs/                  enunciado, razonamiento y capturas
-```
+## Cumplimiento
+
+| Pide el enunciado | Estado | Evidencia |
+|---|---|---|
+| Dockerizar | ✅ | [Dockerfile](app-python/Dockerfile) · [razonamiento §1](docs/razonamiento.md#1-dockerizar-la-aplicación) |
+| Build, tests, análisis estático, coverage | ✅ | [ci.yml](.github/workflows/ci.yml) · [corrida en verde](https://github.com/DrCoffee84/devsu-danielboullon-devops/actions/runs/44578179451) |
+| Build & push de la imagen | ✅ | GHCR, tag = short SHA |
+| Vulnerability scan (opcional) | ✅ | Trivy en el CI |
+| Kubernetes con ≥ 2 réplicas y HPA | ✅ | [razonamiento §3](docs/razonamiento.md#3-kubernetes) |
+| ConfigMap, Secret, Ingress | ✅ | [app-python-gitops/](app-python-gitops/) |
+| Deploy a Kubernetes en el pipeline | 🟡 | [corrida del CD](https://github.com/DrCoffee84/devsu-danielboullon-devops/actions/runs/44813163928) · no aplica: ver [Lo que no hice](#lo-que-no-hice-y-por-qué) |
+| URL pública | ❌ | Cluster local (el enunciado lo permite) |
+| IaC en cloud (extra) | ❌ | Ver [Lo que no hice](#lo-que-no-hice-y-por-qué) |
 
 ## Diagramas
 
@@ -60,124 +73,124 @@ flowchart LR
     pdb[PDB] -.protege.-> deploy
 ```
 
-En dev/prod Postgres es una base gestionada (ej: RDS) y no vive en el cluster.
-
-## App
-
-Cambios mínimos sobre la app original, solo para que pueda correr en Kubernetes:
-
-| Variable | Uso | Default |
-|---|---|---|
-| `DJANGO_SECRET_KEY` | clave de Django | obligatoria |
-| `DJANGO_DEBUG` | modo debug | `False` |
-| `DJANGO_ALLOWED_HOSTS` | hosts aceptados, separados por coma | `localhost,127.0.0.1` |
-| `DATABASE_URL` | Postgres (`postgres://user:pass@host:5432/db`) | sin valor → SQLite |
-| `DATABASE_NAME` | archivo SQLite si no hay `DATABASE_URL` | `/data/db.sqlite3` en la imagen |
-
-| Endpoint | Para qué |
-|---|---|
-| `/healthz` | liveness: el proceso responde, no toca la base |
-| `/readyz` | readiness: además hay conexión a la base (503 si no) |
-
-Los dos los resuelve un middleware antes de validar `ALLOWED_HOSTS`, porque el kubelet manda la IP del pod como Host.
+En dev/prod Postgres es una base gestionada (ej: RDS), fuera del cluster.
 
 ## Docker
 
 [app-python/Dockerfile](app-python/Dockerfile)
 
-- Multi-stage: `builder` instala dependencias en un venv; `runtime` es `python:3.11-slim-bookworm` y solo copia el venv y el código.
-- `requirements.txt` se copia primero para aprovechar la caché de capas.
-- Corre con gunicorn (no con `runserver`), en el puerto 8000.
-- Usuario no-root (UID 10001). El código es de root y de solo lectura; solo `/data` es escribible.
-- `HEALTHCHECK` contra `/healthz`.
-- No corre migraciones al arrancar: en Kubernetes las hace un initContainer.
+- Multi-stage → la imagen final no lleva herramientas de build.
+- `requirements.txt` primero → aprovecha la caché de capas.
+- `python:3.11-slim` → chica y compatible con las dependencias.
+- gunicorn en el puerto 8000 → servidor de producción, no `runserver`.
+- Usuario no-root (UID 10001) → si explotan la app, no es root.
+- Código de solo lectura → el proceso no puede modificarse a sí mismo.
+- `HEALTHCHECK` a `/healthz` → sirve fuera de Kubernetes (`docker run`).
+- Sin migraciones al arrancar → son un paso del deploy, no de la imagen.
 
-Los tests se corren con [app-python/Dockerfile.test](app-python/Dockerfile.test), así el pipeline no depende del lenguaje.
+## Cambios en la app
 
-Correrlo local con SQLite en un volumen:
+Mínimos, solo para poder correrla en Kubernetes:
 
-```bash
-cd app-python
-docker build -t app-python .
-docker volume create app-data
-docker run --rm -v app-data:/data -e DJANGO_SECRET_KEY=dev app-python python manage.py migrate
-docker run --rm -p 8000:8000 -v app-data:/data -e DJANGO_SECRET_KEY=dev app-python
-curl http://localhost:8000/healthz
-```
+- Config por variables: `DJANGO_SECRET_KEY`, `DJANGO_DEBUG`, `DJANGO_ALLOWED_HOSTS`, `DATABASE_URL`.
+- Sin `DATABASE_URL` sigue usando SQLite → no rompe el uso local ni los tests.
+- `/healthz` → el proceso responde. No toca la base.
+- `/readyz` → además hay conexión a la base (503 si no).
+- Tests nuevos para los health checks. Coverage > 95%.
 
 ## Pipeline
 
-### CI — [ci.yml](.github/workflows/ci.yml)
+### CI · [ci.yml](.github/workflows/ci.yml)
 
 Corre en cada push a `master`.
 
-| Paso | Herramienta |
-|---|---|
-| Code build | `docker build` |
-| Static code analysis | ruff (lint) y bandit (SAST) |
-| Escaneo de secretos | chequeo de `.env` versionado y patrones con `git grep` |
-| Unit tests + coverage | pytest + pytest-cov en `Dockerfile.test`, mínimo 80% |
-| Vulnerability scan | Trivy, falla con CVE críticos |
-| Build & push | GHCR, tag = short SHA (y `latest`) |
+| Paso | Herramienta | Por qué |
+|---|---|---|
+| Lint | ruff | errores de código antes de buildear |
+| SAST | bandit | problemas de seguridad en el código |
+| Secretos | `git grep` + chequeo de `.env` | que no se suba una clave |
+| Tests + coverage | pytest en `Dockerfile.test`, mínimo 80% | mismas dependencias que la imagen |
+| Build | `docker build` | |
+| Vulnerability scan | Trivy, corta con CRITICAL | no publicar imágenes con CVE graves |
+| Push | GHCR, tag = short SHA | tag inmutable y trazable al commit |
 
-Los reportes (junit, coverage) quedan como artifact del run.
+### CD · [cd.yml](.github/workflows/cd.yml) + [_deploy.yml](.github/workflows/_deploy.yml)
 
-Corrida en verde: https://github.com/DrCoffee84/devsu-danielboullon-devops/actions/runs/44578179451
+- 1 build → N deploys → a prod llega la misma imagen que se probó en dev.
+- Arranca cuando el CI termina bien.
+- dev automático → prod espera aprobación en el Environment `prod`.
+- Solo tags SHA, nunca `latest` → se verifica que exista en GHCR.
+- El tag se commitea en el overlay → Git dice qué corre en cada ambiente.
+- Después: render → `kubectl apply` → `rollout status`.
+- Rollback → relanzar el CD con el tag anterior.
 
-### CD — [cd.yml](.github/workflows/cd.yml) + [_deploy.yml](.github/workflows/_deploy.yml)
-
-- **1 build → N deploys**: el CD nunca construye, promueve la misma imagen de dev a prod.
-- Se dispara cuando el CI termina bien en `master`.
-- dev se despliega automático; prod espera aprobación en el Environment `prod` de GitHub.
-- Solo acepta tags SHA (nunca `latest`) y verifica que existan en GHCR.
-- Pasos: `kustomize edit set image` en el overlay → render → `kubectl diff` → `apply` → `rollout status` → smoke test.
-- Si el rollout falla, hace `kubectl rollout undo` automático.
-- Rollback manual: `workflow_dispatch` con un tag anterior.
-- Si el Environment no tiene `KUBE_CONFIG`, renderiza y sube los manifiestos como artifact, pero no aplica.
-
-Detalle de configuración y rollback: [app-python-gitops/README.md](app-python-gitops/README.md)
+Detalle de cómo se opera: [app-python-gitops/README.md](app-python-gitops/README.md).
 
 ## Kubernetes
 
+Kustomize: una `base/` y un overlay por ambiente (`local`, `dev`, `prod`).
+
 | Recurso | Para qué |
 |---|---|
-| Namespace | uno por ambiente (`app-python-<ambiente>`), con Pod Security `restricted` |
-| Deployment | 2 réplicas, rolling update sin indisponibilidad, initContainer de migraciones, probes `/healthz` y `/readyz`, no-root, rootfs de solo lectura |
-| Service | ClusterIP, puerto 80 → 8000 |
-| HPA | escalado horizontal por CPU y memoria (2–5 en base, 3–10 en prod) |
-| PDB | asegura pods disponibles durante drains |
+| Namespace | uno por ambiente (`app-python-<env>`), Pod Security `restricted` |
+| Deployment | 2 réplicas, rolling update sin cortes, no-root, rootfs de solo lectura |
+| initContainer `migrate` | corre las migraciones antes de cada pod |
+| Probes | liveness `/healthz`, readiness `/readyz` |
+| Service | ClusterIP, 80 → 8000 |
+| HPA | escala por CPU y memoria (2–5 base, 3–10 prod) |
+| PDB | deja pods vivos durante un drain |
 | ConfigMap | `DJANGO_DEBUG`, `DJANGO_ALLOWED_HOSTS` |
-| Secret | `DJANGO_SECRET_KEY`, `DATABASE_URL` (secretGenerator en local, ExternalSecret desde Vault en dev/prod) |
-| Ingress | nginx; TLS con cert-manager en dev/prod |
-| NetworkPolicy | deny-all y solo entra tráfico desde ingress-nginx (dev/prod) |
+| Secret | local: `secretGenerator` · dev/prod: ExternalSecret desde Vault |
+| Ingress | nginx · TLS con cert-manager en dev/prod |
+| NetworkPolicy | dev/prod: solo entra tráfico del Ingress |
 | ServiceAccount | sin token montado |
-| StatefulSet `postgres` | solo en local, con PVC de 1Gi |
+| Postgres StatefulSet | solo en local, con PVC |
 
-### Correrlo en local (Docker Desktop)
+Decisiones clave:
 
-Requisitos: Kubernetes de Docker Desktop, ingress-nginx y metrics-server (para el HPA).
+- Liveness no mira la base → si cae la DB, no reinicia todos los pods.
+- Namespace en el overlay, no en la base → cada ambiente es un namespace.
+- Imagen pública → no hace falta `imagePullSecret`.
+
+### Correrlo en local
+
+Requisitos: Kubernetes de Docker Desktop, ingress-nginx y metrics-server.
 
 ```bash
 kubectl apply -f app-python-gitops/overlays/local/namespace.yaml
 kubectl apply -k app-python-gitops/overlays/local
-kubectl get pods -n app-python-local
+kubectl get pods,hpa -n app-python-local
 curl http://app-python.localhost/api/users/
 ```
 
-## URL pública
+Solo la imagen, sin Kubernetes:
 
-No hay. El despliegue se hizo en un cluster local de Docker Desktop, que el enunciado permite. La evidencia está en [docs/razonamiento.md](docs/razonamiento.md#3-kubernetes).
+```bash
+cd app-python
+docker build -t app-python .
+docker run --rm -v app-data:/data -e DJANGO_SECRET_KEY=dev app-python python manage.py migrate
+docker run --rm -p 8000:8000 -v app-data:/data -e DJANGO_SECRET_KEY=dev app-python
+```
 
-## Lo que no se cumplió y por qué
+## Supuestos
 
-- **IaC en un proveedor público (punto extra)**: no se hizo. Prioricé la imagen, Kubernetes y el pipeline.
-- **Deploy desde el pipeline a un cluster real**: el CD está completo, pero el cluster es local y GitHub Actions no llega a él. Sin `KUBE_CONFIG`, el job renderiza y valida sin aplicar.
+- dev/prod tienen ingress-nginx, cert-manager y External Secrets con Vault instalados.
+- La base de dev/prod es gestionada (ej: RDS). Su URL está en Vault.
+- Los dominios `*.example.com` son de ejemplo.
+- dev usa 1 réplica mínima para ahorrar. El mínimo de 2 lo cumplen local y prod.
+- El cluster de cada ambiente se configura con el secret `KUBE_CONFIG` del Environment.
+
+## Lo que no hice y por qué
+
+- **Deploy real desde el pipeline**: mi cluster es local y GitHub Actions no llega. Sin `KUBE_CONFIG`, el CD commitea el tag, renderiza y sube el manifiesto como artifact, pero no aplica.
+- **URL pública**: por lo mismo. El enunciado permite local.
+- **IaC en cloud (extra)**: prioricé imagen, Kubernetes y pipeline, no tengo una cuenta de aws disponible y el tiempo era limitado. 
 
 ## Para producción
 
-- **DNS y TLS**: los hosts `*.example.com` de dev/prod son de ejemplo. Con un dominio real, cert-manager emite el certificado con Let's Encrypt (ya configurado en los Ingress).
-- **Base de datos**: Postgres gestionado (ej: RDS) con backups y la URL en Vault.
-- **Migraciones**: hoy corren en un initContainer. Con más tráfico las pasaría a un Job o a un paso del CD antes del rollout.
-- **Permisos del CD**: un ServiceAccount con permisos acotados a su namespace, no el admin del cluster.
-- **GitOps**: un controlador como Argo CD o Flux en lugar del `kubectl apply` del pipeline.
-- **Observabilidad**: métricas, logs centralizados y alertas sobre `/readyz` y los errores 5xx.
+- DNS y TLS: dominio real + cert-manager con Let's Encrypt (ya está en los Ingress).
+- Acceso del CD: OIDC y un ServiceAccount acotado al namespace, no un kubeconfig admin.
+- GitOps: Argo CD con sync disparado por el pipeline (sin auto-sync).
+- Migraciones: un Job antes del rollout en lugar del initContainer.
+- Observabilidad: métricas, logs centralizados y alertas sobre 5xx y `/readyz`.
+- Backups: los da la base gestionada.

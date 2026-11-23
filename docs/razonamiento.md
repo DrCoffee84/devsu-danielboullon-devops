@@ -57,7 +57,7 @@ Separo en dos pipelines:
 
 ### CI
 
-- Me gusta (es discutible) poner los tests en un `Dockerfile.test`. Así el pipeline queda más genérico y no depende del lenguaje.
+- Me gusta (es discutible) poner los tests en un `Dockerfile.test`. Corren con las mismas dependencias que la imagen y el paso del pipeline queda igual para cualquier lenguaje. El lint y el SAST quedaron en el runner porque ahí son más rápidos.
 - Uso GitHub Actions, así se pueden ver las corridas que fui haciendo. La idea es una implementación mínima pero funcional, con herramientas que corran dentro del runner.
 - La IA había puesto la rama `main` y yo trabajo en `master` → lo corregí.
 - Primera corrida: falló en el lint, pero falló bien. Ruff encontró errores reales y ya que estamos los arreglé.
@@ -68,6 +68,8 @@ Separo en dos pipelines:
 - Subí Django a 4.2.30 y Trivy pasó. La imagen queda más segura que antes. Se podrían sumar más escáneres, pero para el ejercicio me parece suficiente.
   https://github.com/DrCoffee84/devsu-danielboullon-devops/actions/runs/44578179451
 - Con la imagen ya publicada en GitHub Container Registry, doy el CI por terminado.
+
+> TODO: poner imagen del CI en verde (Actions → CI → última corrida, con los 6 pasos a la vista).
 
 ## 3. Kubernetes
 
@@ -118,11 +120,27 @@ HTTP/1.1 200 OK
 {"id":1,"dni":"12341234","name":"Akira Toriyama"}
 ```
 
+> TODO: poner imagen de los recursos levantados:
+> ```
+> kubectl get pods,svc,hpa,pdb,ingress -n app-python-local
+> ```
+
+> TODO: poner imagen del HPA escalando. En una terminal:
+> ```
+> kubectl get hpa -n app-python-local -w
+> ```
+> En otra, generar carga (en `default`, porque el namespace de la app es `restricted` y busybox corre como root):
+> ```
+> kubectl run load --rm -it --image=busybox:1.36 --restart=Never -- /bin/sh -c "while true; do wget -q -O- http://app-python.app-python-local/api/users/ > /dev/null; done"
+> ```
+> Capturar cuando pasa de 2 a 3 o más réplicas. Cortar con Ctrl+C y ver que baja.
+
 ## 4. CD
 
 - Siempre pienso en **1 build → N deploys**: la imagen se construye una sola vez y se promueve la misma a cada ambiente.
 - Uso la rama principal para desplegar a dev y a prod.
-- ¿Por qué? Porque con los aprobadores de los Environments de GitHub solo llega a prod lo que ya se probó en otro ambiente (dev; también podrían ser test y stage). Hoy la mayoría de las empresas usa 2 ambientes en vez de 4, y algunas ya prueban directo en producción.
+- ¿Por qué? Porque con los aprobadores de los Environments de GitHub solo llega a prod lo que ya se probó en otro ambiente (dev; también podrían ser test y stage). En lo que vi, cada vez más equipos usan 2 ambientes en vez de 4, y algunos ya prueban directo en producción.
+- Cómo quedó el flujo final, con el tag commiteado en Git: ver [Sigo, hoy es otro día](#sigo-hoy-es-otro-día-cierro-el-cd-con-gitops).
 
 ## 5. Pendientes
 
@@ -162,8 +180,12 @@ Revisando el diseño me di cuenta de que había algo mal: dev y prod no seguían
 - `cd.yml` resuelve el tag (short SHA), verifica que la imagen exista en GHCR y llama a `_deploy.yml` una vez por ambiente: dev automático y prod después de dev, con la aprobación del Environment.
 - `_deploy.yml` hace lo mismo en dev y en prod: checkout de `master`, `kustomize edit set image` en `overlays/<env>`, commit `chore(<env>): set image tag <sha> [skip ci]`, `git pull --rebase` y push a `master`. Recién después renderiza con `kustomize build`, sube el manifiesto como artifact y, si el Environment tiene `KUBE_CONFIG`, aplica y espera el `rollout status`.
 
-¿Por qué commitear en los dos ambientes? Porque así **Git es la única fuente de verdad**: el `newTag` de cada `kustomization.yaml` es exactamente lo que está desplegado, el historial de `master` es el historial de deploys y un rollback es volver a un commit (o relanzar el CD con un tag anterior). El `[skip ci]` evita el loop: sin eso, el commit del CD dispararía el CI, que dispararía el CD otra vez. El `pull --rebase` antes del push es para que el commit de prod no choque con el de dev, que se pushea unos minutos antes.
+¿Por qué commitear en los dos ambientes? Porque así **Git es la única fuente de verdad**: el `newTag` de cada `kustomization.yaml` es exactamente lo que está desplegado, el historial de `master` es el historial de deploys y un rollback es volver a un commit (o relanzar el CD con un tag anterior). El `[skip ci]` es un seguro: hoy no haría falta, porque GitHub no dispara workflows con los push del `GITHUB_TOKEN` (justamente para evitar loops). Pero si mañana el commit lo hace una GitHub App o un token propio, por ejemplo con el repo gitops aparte, sin eso el commit del CD dispararía el CI y el CI otra vez el CD. El `pull --rebase` antes del push es para que el commit de prod no choque con el de dev, que se pushea unos minutos antes.
 
 Los permisos los dejé al mínimo: `permissions: {}` global en `cd.yml`, `packages: read` solo para el job que consulta GHCR y `contents: write` explícito en los jobs que llaman al reusable. Un workflow reusable no puede pedir más permisos de los que le da quien lo llama; sin ese `contents: write` en el caller, GitHub corta el run con un `Startup failure` antes de arrancar.
 
 El paso siguiente sería sumar Argo CD. No me gusta el `auto-sync`: por experiencia trae sorpresas (syncs en momentos que nadie eligió, drift que se pisa sin que nadie lo mire). Prefiero que el deploy sea algo controlado. Con este diseño el cambio es chico: el pipeline sigue commiteando el tag igual que ahora y, en lugar del `kubectl apply`, dispara por CLI el sync contra ese commit, algo como `argocd app sync app-python-<env> --revision <sha-del-commit>` seguido de `argocd app wait app-python-<env> --health --timeout 300`. Argo CD lee el estado de Git, el pipeline solo decide cuándo, y queda registrado quién y qué se desplegó.
+
+> TODO: poner imagen del CD completo: dev en verde, prod esperando aprobación y después aprobado.
+
+> TODO: poner imagen de los commits del bot en `master` (`chore(dev): set image tag ...` y `chore(prod): ...`).

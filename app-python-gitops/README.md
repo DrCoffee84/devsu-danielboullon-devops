@@ -1,121 +1,97 @@
 # app-python-gitops
 
-Manifiestos Kustomize de `app-python` y cómo los despliega el CD.
+Manifiestos Kustomize de `app-python` y cómo se operan.
+En una empresa sería un repo aparte. Acá está junto para que sea fácil de evaluar.
 
 ```
-base/                 Deployment, Service, HPA, PDB, ServiceAccount, ConfigMap
-overlays/local/       laboratorio en Docker Desktop (Postgres propio, secretGenerator, tag latest)
-overlays/dev/         entorno dev  → namespace app-python-dev
-overlays/prod/        entorno prod → namespace app-python-prod
+base/             Deployment, Service, HPA, PDB, ServiceAccount, ConfigMap
+overlays/local/   Docker Desktop: Postgres propio, secretGenerator, tag latest
+overlays/dev/     namespace app-python-dev
+overlays/prod/    namespace app-python-prod
 ```
+
+## Diferencias entre ambientes
 
 | | dev | prod |
 |---|---|---|
-| Réplicas (HPA) | 1–3 | 3–10, scale-down estabilizado 5 min |
+| Réplicas (HPA) | 1–3 | 3–10 |
 | PDB | `maxUnavailable: 1` | `minAvailable: 2` |
-| Recursos | los de la base | 250m/256Mi → 1 CPU/512Mi |
+| Recursos | los de la base | más CPU y memoria |
 | Spread | por nodo | por nodo y por zona |
-| Secretos | ExternalSecret `app-python/dev` | ExternalSecret `app-python/prod` |
-| Base de datos | gestionada, `DATABASE_URL` desde Vault | igual |
-| Hosts | `DJANGO_ALLOWED_HOSTS` = dominio del Ingress | igual |
-| Red | deny-all + solo ingress-nginx → 8000 | igual |
-| TLS | cert-manager `letsencrypt-staging` | cert-manager `letsencrypt-prod` |
+| Secretos | Vault `app-python/dev` | Vault `app-python/prod` |
+| TLS | Let's Encrypt staging | Let's Encrypt prod |
 
-Requisitos en el cluster de dev/prod: ingress-nginx, cert-manager con los
-ClusterIssuer nombrados, y External Secrets Operator con un
-`ClusterSecretStore` llamado `vault-backend`. Los hosts `*.example.com` de los
-Ingress son placeholders.
+Igual en los dos: base gestionada, NetworkPolicy, mismo flujo de deploy.
 
-## Flujo de CD (1 build → N deploys)
+Requisitos del cluster: ingress-nginx, cert-manager y External Secrets con un `ClusterSecretStore` llamado `vault-backend`.
+
+## Cómo despliega el CD
 
 ```
-push master → CI (build + push ghcr.io/drcoffee84/devsu-danielboullon-devops:<sha7>)
-            → CD: resolve → deploy dev (auto) → deploy prod (espera aprobación)
+push master → CI: build + push ghcr.io/drcoffee84/devsu-danielboullon-devops:<sha7>
+            → CD: verificar imagen → deploy dev (auto) → deploy prod (aprobación)
 ```
 
-- CI construye la imagen una sola vez. CD nunca construye: promueve el mismo
-  tag (y por lo tanto el mismo digest) de dev a prod.
-- Antes de aplicar, el CD corre `kustomize edit set image` **solo en el overlay
-  del entorno** y en el runner (no commitea). La base no se toca.
-- Cada entorno tiene su propio tag desplegado; dev puede ir adelante de prod.
-- Nunca se usa `latest` en dev ni prod: el CD rechaza cualquier tag que no sea
-  un SHA hex y verifica que exista en GHCR antes de desplegar.
-- Si el rollout no queda sano en 5 min, el CD hace `kubectl rollout undo` y
-  el job falla.
+Cada deploy:
 
-## Activar los aprobadores de prod
+1. `kustomize edit set image` en el overlay del ambiente.
+2. Commit `chore(<env>): set image tag <sha7> [skip ci]` a `master`.
+3. `kustomize build` y sube el manifiesto como artifact.
+4. Si el Environment tiene `KUBE_CONFIG`: `kubectl apply` y `rollout status`.
 
-1. GitHub → repo → **Settings → Environments → New environment** → `dev`.
-   Sin reglas de protección. Cargá el secret `KUBE_CONFIG` y, si querés, la variable `APP_URL`.
-2. **New environment** → `prod`:
-   - **Required reviewers**: agregá hasta 6 personas o equipos.
-     (Opcional: **Prevent self-review** para que quien dispara no pueda aprobar.)
-   - **Deployment branches and tags** → *Selected branches* → `master`.
-   - Secret `KUBE_CONFIG` y variable `APP_URL` del cluster de prod.
-3. `KUBE_CONFIG` es el kubeconfig en base64: `base64 -w0 kubeconfig-prod.yaml`.
-   Usá un ServiceAccount con permisos acotados a su namespace, no el admin del cluster.
+- La base nunca se toca. Solo cambia el `newTag` del overlay.
+- dev puede ir adelante de prod.
+- Si el rollout no queda sano en 5 minutos, el job falla.
 
-Sin `KUBE_CONFIG`, el CD renderiza, valida y sube los manifiestos como
-artifact, pero **no aplica** y deja un warning. Sin Required reviewers, prod se
-despliega sin pedir aprobación.
+## Configurar los Environments
 
-Si los paquetes de GHCR son privados, el cluster necesita un `imagePullSecret`
-para `ghcr.io`.
+En GitHub → Settings → Environments:
 
-## Qué tag está desplegado
+- `dev`: sin reglas. Secret `KUBE_CONFIG` y variable `APP_URL`.
+- `prod`: Required reviewers, solo rama `master`, secret `KUBE_CONFIG` y variable `APP_URL`.
+
+`KUBE_CONFIG` es el kubeconfig en base64 (`base64 -w0 kubeconfig.yaml`).
+Sin `KUBE_CONFIG` el CD hace todo menos aplicar.
+
+## Qué versión corre en cada ambiente
+
+Está en Git: el `newTag` de `overlays/<env>/kustomization.yaml`.
 
 ```bash
-# Imagen actual
+git log --oneline -- app-python-gitops/overlays/prod   # historial de deploys de prod
+```
+
+En el cluster:
+
+```bash
 kubectl get deploy app-python -n app-python-prod \
   -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
-
-# Historial: cada revisión guarda tag, actor y run en change-cause
-kubectl rollout history deployment/app-python -n app-python-prod
-```
-
-Sin acceso al cluster: **Actions → CD** (el summary de cada run muestra imagen
-y digest) o la página del environment en **Code → Deployments**.
-
-Tags disponibles en GHCR:
-
-```bash
-gh api /users/drcoffee84/packages/container/devsu-danielboullon-devops/versions \
-  --jq '.[].metadata.container.tags[]' | grep -v latest | head
 ```
 
 ## Rollback
 
-Vuelve a desplegar una imagen que ya está en GHCR, sin reconstruirla:
+Relanzar el CD con un tag anterior. Pasa por la misma aprobación y queda commiteado:
 
 ```bash
 gh workflow run CD --ref master -f environment=prod -f image_tag=<sha7-anterior>
 ```
 
-O desde la UI: **Actions → CD → Run workflow** → `prod` + tag. Pasa por la
-misma aprobación del Environment `prod`. Los manifiestos salen de `master`
-actual y solo cambia la imagen.
-
-Rollback de emergencia directo en el cluster (sin pipeline):
+Emergencia, directo en el cluster:
 
 ```bash
-kubectl rollout undo deployment/app-python -n app-python-prod            # revisión anterior
-kubectl rollout undo deployment/app-python -n app-python-prod --to-revision=<N>
+kubectl rollout undo deployment/app-python -n app-python-prod
 ```
 
-El próximo deploy desde el CD vuelve a dejar el cluster como dice git más el tag elegido.
+El próximo deploy vuelve a dejar el cluster como dice Git.
 
 ## Base de datos y migraciones
 
-- La app usa `DATABASE_URL` (Postgres). En local hay un StatefulSet `postgres`
-  con un PVC de 1Gi; en dev/prod la URL apunta a una base gestionada.
-- Las migraciones las corre el initContainer `migrate` antes de que arranque
-  cada pod. Con `maxSurge: 1` en un rollout solo migra un pod nuevo a la vez.
-- Las migraciones tienen que ser compatibles hacia atrás: durante el rollout
-  conviven pods viejos con el esquema nuevo.
+- La app usa `DATABASE_URL`. Local: StatefulSet de Postgres. dev/prod: base gestionada.
+- Las migraciones las corre el initContainer `migrate` antes de cada pod.
+- Tienen que ser compatibles hacia atrás: en un rollout conviven pods viejos y nuevos.
 
 ## Health checks
 
-- `/healthz` (startup y liveness): el proceso responde, no toca la base.
+- `/healthz` (startup y liveness): el proceso responde. No toca la base.
 - `/readyz` (readiness): además hay conexión a la base.
-- Los dos responden antes de la validación de `ALLOWED_HOSTS`, por eso las
-  probes del kubelet funcionan sin forzar el header `Host`.
+- Responden antes de validar `ALLOWED_HOSTS` → el kubelet llega con la IP del pod.

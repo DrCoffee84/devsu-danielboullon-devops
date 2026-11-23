@@ -18,7 +18,7 @@ configMapGenerator:
   - name: app-python-config
     behavior: merge
     literals:
-      - DJANGO_ALLOWED_HOSTS=app-python.prod.example.com
+      - DJANGO_ALLOWED_HOSTS=app-python.example.com
 
 images:
   - name: ghcr.io/drcoffee84/devsu-danielboullon-devops
