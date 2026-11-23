@@ -22,7 +22,7 @@ configMapGenerator:
 
 images:
 - name: ghcr.io/drcoffee84/devsu-danielboullon-devops
-  newTag: d1c6790
+  newTag: d8df406
 
 patches:
 - path: patches/deployment.yaml
