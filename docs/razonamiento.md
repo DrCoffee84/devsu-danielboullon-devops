@@ -1,6 +1,6 @@
 # Razonamiento
 
-No es un documento formal: acá voy anotando cómo pienso y encaro el ejercicio.
+No es un documento formal: acá voy anotando cómo pienso y encaro el ejercicio, esta escrito por mi pero lo pase por la IA asi quedaba mucho mas claro. 
 
 Como me están evaluando, quiero que se vea el porqué de cada decisión. La idea no es que la IA resuelva todo por mí, sino usarla como apoyo en las tareas que a mano serían más pesadas. El escenario es un caso típico de DevOps, así que lo importante es mostrar cómo analizo el problema y cómo llego a cada solución.
 
@@ -77,13 +77,13 @@ Antes del CD tengo algunos problemas que resolver:
 
 1. No tengo dónde desplegar → armo un laboratorio local de Kubernetes.
 2. Uso Docker Desktop porque estoy en Windows, y un nodo para 2 pods me alcanza y sobra.
-3. Tengo que definir dónde viven los manifiestos. La carpeta de la app, en teoría, es del dev; salvo ayudarlo con los Dockerfile (por PR o dejando una plantilla decente), no quiero tocar su repo. Entonces creo una carpeta gitops que simula un repositorio aparte. Acá queda todo junto para que sea más fácil de evaluar.
+3. Tengo que definir dónde viven los manifiestos. La carpeta de la app, en teoría, es solo del equipo de desarrollo; salvo ayudarlo con los Dockerfile (por PR o dejando una plantilla decente), no quiero tocar su repo. Entonces creo una carpeta gitops que simula un repositorio aparte, esto en la vida real si o si va separado. Acá queda todo junto para que sea más fácil de evaluar.
 
 Decisiones:
 
 - Nomenclatura `<nombreDeApp>-gitops`. En una empresa esto lo podría crear el IDP.
 - Como la imagen es pública, el Deployment la usa directo, sin `imagePullSecret`.
-- Usé la IA para armar Kustomize con base y overlays. No me gustó que pusiera el namespace en la base: para mí cada overlay es un ambiente, y cada ambiente es un namespace con el ambiente como sufijo (`app-python-local`, `app-python-dev`, `app-python-prod`). Esto también lo podría automatizar el IDP. Más adelante quizás saque la DB a otro namespace.
+- Usé la IA para armar Kustomize con base y overlays. No me gustó que pusiera el namespace en la base: para mí cada overlay es un ambiente, y cada ambiente es un namespace con el ambiente como sufijo (`app-python-local`, `app-python-dev`, `app-python-prod`). Esto también lo podría automatizar el IDP. 
 - Reviso el render con `kubectl kustomize overlays/local`.
 - Prefiero crear primero el namespace; me parece menos propenso a errores:
 
@@ -123,26 +123,27 @@ HTTP/1.1 200 OK
 ![alt text](screenshots/app-python-local.png)
 
 
-### Probe HPA
+### Probar HPA
 
+Tire un pod que simule carga al services de nuesrta app para ver si escala bien por CPU y Memoria. 
 
 ![HPA up](screenshots/hpa_up.png)
 
-Estaba probando el  HPA y vi que no bajaba automaticamente, al poner gunicorn y la configuraciones del hpa en memory 80%, y  al ser una app simple y tener tan poca ram asignada, nunca bajaba de 5 porque el promedio de ram me daba 66% en 5 pods y hpa hace las cuentas y dice "si bajo a 4 me queda por arriba del 80% entonces no bajo"
+Vi que sube sin problemas pero no baja automaticamente, al poner gunicorn y la configuraciones del hpa en memory 80%, y  al ser una app simple y tener tan poca ram asignada, nunca bajaba de 5 porque el promedio de ram me daba 66% en 5 pods y hpa hace las cuentas y dice "si bajo a 4 me queda por arriba del 80% entonces no bajo"
 
-Si fuera producion real se haria un estudio de la app , memoria promedio y tope, resources y limits, pero como es un ejercicio simplemetne quito la ram del HPA y lo comiteo.
+Si fuera producion real se haria un estudio de la app , memoria promedio y tope, resources y limits, hasta quizas no usaria estas metricas y usaria alguna custom (como request en coladas si estamos con kafka), pero como es un ejercicio simplemetne quito la ram del HPA y lo comiteo.
+![HPA down](screenshots/hpa_down.png)
 
 
 ## 4. CD
 
-- Siempre pienso en **1 build → N deploys**: la imagen se construye una sola vez y se promueve la misma a cada ambiente.
-- Uso la rama principal para desplegar a dev y a prod.
-- ¿Por qué? Porque con los aprobadores de los Environments de GitHub solo llega a prod lo que ya se probó en otro ambiente (dev; también podrían ser test y stage). En lo que vi, cada vez más equipos usan 2 ambientes en vez de 4, y algunos ya prueban directo en producción.
+- Siempre me gusto el principio de **1 build → N deploys**: la imagen se construye una sola vez y se promueve la misma a cada ambiente, esto nos asegura que la aplicacion que se probo en todos los ambientes (desde DEV hasta stage) sea la misma para producion. 
+- En lo que vi, cada vez más equipos usan 2 ambientes en vez de 4, y algunos ya prueban directo en producción, pero bueno digamos que lo standar que veo yo en mis experiencias en el ultimo tiempo son 2 ambientes (mas que nada para microservicios)
 - Cómo quedó el flujo final, con el tag commiteado en Git: ver [Sigo, hoy es otro día](#sigo-hoy-es-otro-día-cierro-el-cd-con-gitops).
 
 ## 5. Pendientes
 
-Con todo andando, repasé lo que me fui anotando en el camino y lo que dejé "para después". Algunas cosas las fui parchando para avanzar y ahora las cierro bien.
+Con todo andando, repasé lo que me fui observando en el camino y lo que dejé "para después". Algunas cosas las fui parchando para avanzar y ahora las cierro bien.
 
 ### Lo que resolví
 
@@ -161,7 +162,7 @@ Con todo andando, repasé lo que me fui anotando en el camino y lo que dejé "pa
 
 ### Lo que dejo pendiente
 
-- **IaC (punto extra)**: no lo hice. Prioricé que la imagen, Kubernetes y el pipeline quedaran bien.
+- **IaC (punto extra)**: no lo hice. Prioricé que la imagen, Kubernetes y el pipeline quedaran bien, no tuve mucho tiempo para usar el emulador de AWS y no tengo cuenta de AWS actualmente ( se me vencio el año gratis ya xD).
 - **Deploy desde el pipeline**: el CD está armado, pero GitHub Actions no llega a mi cluster local. Sin `KUBE_CONFIG` renderiza y valida, pero no aplica.
 - **DNS y TLS reales**: los Ingress de dev/prod usan `*.example.com`. Con un dominio real, cert-manager y Let's Encrypt ya están preparados.
 - **Permisos del CD**: hoy usaría el kubeconfig que le pase. Lo correcto es un ServiceAccount con permisos acotados a su namespace.
@@ -171,7 +172,9 @@ Con todo andando, repasé lo que me fui anotando en el camino y lo que dejé "pa
 
 ### Sigo, hoy es otro día: cierro el CD con GitOps
 
-Probé el pipeline de CD de punta a punta. El apply está mockeado porque no tengo un cluster de k8s vivo al que GitHub Actions pueda llegar, pero el flujo es el real: https://github.com/DrCoffee84/devsu-danielboullon-devops/actions/runs/44813163928
+Probé el pipeline de CD de punta a punta. El apply está mockeado porque no tengo un cluster de k8s vivo al que GitHub Actions pueda llegar, pero el flujo es el real: https://github.com/DrCoffee84/devsu-danielboullon-devops/actions/runs/45240035572
+
+
 
 Revisando el diseño me di cuenta de que había algo mal: dev y prod no seguían el mismo criterio. El tag se cambiaba en el runner con `kustomize edit set image` y se aplicaba sin commitear, así que lo desplegado vivía solo en memoria del job y el repo no decía qué versión corría en cada ambiente. Lo cambié para que haya un único flujo GitOps para los dos:
 
